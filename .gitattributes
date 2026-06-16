@@ -1,0 +1,54 @@
+###############################################################################
+# Line-ending policy: LF everywhere, including the working tree on Windows.
+#
+# `text=auto eol=lf` normalizes all text files to LF in the repository AND
+# forces LF on checkout on every platform - so a Windows working copy is LF,
+# not the platform-native CRLF that bare `text=auto` would produce. This keeps
+# the source tree uniform regardless of who edits from which OS, and prevents
+# whole-file CRLF/LF diffs when an edit tool rewrites a file's line endings.
+#
+# Visual Studio writes (and re-writes) solution files as CRLF, so .sln is
+# carved out to CRLF to match what VS will produce anyway - declaring it
+# avoids a perpetual phantom diff. .csproj is intentionally NOT carved out:
+# VS preserves csproj line endings rather than forcing CRLF, so it normalizes
+# to LF cleanly with the rest of the tree.
+#
+# After adding this file, run a one-time normalize to convert any files that
+# predate it:  git add --renormalize .   then commit.
+###############################################################################
+* text=auto eol=lf
+
+# Visual Studio rewrites .sln as CRLF on save - match that, don't fight it.
+*.sln text eol=crlf
+
+###############################################################################
+# Set the merge driver for project and solution files
+#
+# Merging from the command prompt will add diff markers to the files if there
+# are conflicts (Merging from VS is not affected by the settings below, in VS
+# the diff markers are never inserted). Diff markers may cause the following
+# file extensions to fail to load in VS. An alternative would be to treat
+# these files as binary and thus will always conflict and require user
+# intervention with every merge. To do so, just uncomment the entries below
+###############################################################################
+#*.sln       merge=binary
+#*.csproj    merge=binary
+#*.vbproj    merge=binary
+#*.vcxproj   merge=binary
+#*.vcproj    merge=binary
+#*.dbproj    merge=binary
+#*.fsproj    merge=binary
+#*.lsproj    merge=binary
+#*.wixproj   merge=binary
+#*.modelproj merge=binary
+#*.sqlproj   merge=binary
+#*.wwaproj   merge=binary
+
+###############################################################################
+# behavior for image files
+#
+# image files are treated as binary by default.
+###############################################################################
+#*.jpg   binary
+#*.png   binary
+#*.gif   binary

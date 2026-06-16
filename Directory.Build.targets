@@ -1,0 +1,57 @@
+<Project>
+
+  <!-- =====================================================================
+       Solution-wide forced clean.
+
+       Place this file in the SOLUTION ROOT (next to .sln). MSBuild
+       imports it automatically into every project at or below this folder,
+       so it covers all projects in sln with no per-project edits.
+
+       Purpose: delete stale compiler output and incremental-build state
+       before each build, so errors fixed in a previous build cannot come
+       back from leftover output in obj/.
+
+       Escape hatch: build with /p:ScrubDisabled=true to skip the scrub
+       for a fast incremental build.
+       ===================================================================== -->
+
+  <!-- RECOMMENDED: config-specific scrub.
+       Deletes obj\<Config>\<TFM> and bin\<Config>\<TFM>, then immediately
+       recreates the (empty) intermediate folder. Removes stale compiler
+       output and incremental state but leaves project.assets.json in place,
+       so NuGet does not have to do a full restore every build.
+
+       Runs before PrepareForBuild — the earliest point in the compile
+       pipeline, after restore. This is critical: it must delete BEFORE any
+       target (e.g. SourceLink) resolves a path into obj\Debug\net8.0 and
+       tries to write there. Deleting later (e.g. BeforeTargets=CoreCompile)
+       pulls the folder out from under those targets and causes
+       "Could not find a part of the path" errors.
+
+       The MakeDir is also essential: several targets expect the intermediate
+       folder to already exist and will not create it themselves. -->
+  <Target Name="ScrubIntermediateOutput"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(ScrubDisabled)' != 'true'">
+    <Message Importance="high"
+             Text="Scrubbing $(IntermediateOutputPath) and $(OutDir) for $(MSBuildProjectName) ($(Configuration))..." />
+    <RemoveDir Directories="$(IntermediateOutputPath);$(OutDir)" />
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+  </Target>
+
+  <!-- ALTERNATIVE: full scorched-earth nuke.
+       Deletes the ENTIRE obj and bin trees (all configs) including the NuGet
+       restore assets, forcing a complete restore on every build. Slower.
+       This is the literal equivalent of deleting /obj and /bin by hand.
+       To use it: comment out the target above and uncomment this one.
+
+  <Target Name="ScrubAll"
+          BeforeTargets="Restore;CollectPackageReferences;CoreCompile"
+          Condition="'$(ScrubDisabled)' != 'true'">
+    <Message Importance="high"
+             Text="Full scrub of obj and bin for $(MSBuildProjectName)..." />
+    <RemoveDir Directories="$(BaseIntermediateOutputPath);$(BaseOutputPath)" />
+  </Target>
+  -->
+
+</Project>

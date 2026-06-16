@@ -1,0 +1,532 @@
+using System.Text;
+using Xunit;
+
+namespace Crawler.Tests
+{
+	/// <summary>
+	/// Tests for ContentQualityTriage.BuildGroups().
+	/// The interactive Run() loop is Console-bound and not tested here.
+	/// BuildGroups() is internal — accessible via InternalsVisibleTo.
+	/// Uses Logger collection: LookUpUrlForFile calls Logger.LogError when cache is empty.
+	/// </summary>
+	[Collection("Logger")]
+	public class ContentQualityTriageTests : IDisposable
+	{
+		private readonly string _tempDir;
+
+		public ContentQualityTriageTests()
+		{
+			_tempDir = Path.Combine(Path.GetTempPath(), $"cqt-test-{Guid.NewGuid()}");
+			Directory.CreateDirectory(_tempDir);
+		}
+
+		public void Dispose()
+		{
+			if (Directory.Exists(_tempDir))
+			{
+				Directory.Delete(_tempDir, recursive: true);
+			}
+		}
+
+		// ── Helpers ───────────────────────────────────────────────────────────
+
+		private string LogFile(params string[] rows)
+		{
+			var path = Path.Combine(_tempDir, "10-content-quality-issues.log");
+			var lines = new List<string> { "Filename|IssueType|Detail|Context" };
+			lines.AddRange(rows);
+			File.WriteAllLines(path, lines, Encoding.UTF8);
+			return path;
+		}
+
+		private static List<ContentQualityTriage.TriageGroup> Groups(
+			string logPath) =>
+			ContentQualityTriage.BuildGroups(
+				logPath, "10-content-quality-issues.log",
+				new ContentQualityConfig(), string.Empty);
+
+		// ── Empty / missing ───────────────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_NonExistentFile_ReturnsEmpty()
+		{
+			// BuildGroups checks File.Exists — but it's called after Run() checks.
+			// Create an empty log (header only) to test the empty-data path.
+			var path = LogFile();
+			var groups = Groups(path);
+			Assert.Empty(groups);
+		}
+
+		[Fact]
+		public void BuildGroups_HeaderOnly_ReturnsEmpty()
+		{
+			var path = LogFile();
+			Assert.Empty(Groups(path));
+		}
+
+		// ── UNWANTED_PATTERN grouping ─────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_UnwantedPattern_OneGroupPerPage()
+		{
+			// Three pages with same pattern → three groups (one per page, not grouped)
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context1...",
+				"page2.html|UNWANTED_PATTERN|pattern: %(|...context2...",
+				"page3.html|UNWANTED_PATTERN|pattern: )%|...context3..."
+			);
+			var groups = Groups(path);
+			// Three pages → three groups
+			Assert.Equal(3, groups.Count(g => g.DisplayType == "UNWANTED_PATTERN"));
+		}
+
+		[Fact]
+		public void BuildGroups_UnwantedPattern_CommentReferencesLogFilename()
+		{
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context..."
+			);
+			var groups = Groups(path);
+			var group = groups.First(g => g.DisplayType == "UNWANTED_PATTERN");
+			Assert.Contains("10-content-quality-issues.log", group.Comment);
+		}
+
+		[Fact]
+		public void BuildGroups_UnwantedPattern_WordContainsPattern()
+		{
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context..."
+			);
+			var groups = Groups(path);
+			var group = groups.First(g => g.DisplayType == "UNWANTED_PATTERN");
+			Assert.Contains("pattern: %(", group.Word);
+		}
+
+		[Fact]
+		public void BuildGroups_UnwantedPattern_IsTranslationFalse()
+		{
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context..."
+			);
+			var groups = Groups(path);
+			Assert.False(groups.First().IsTranslation);
+		}
+
+		// ── Quote issue grouping ──────────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_QuoteIssues_SameBlockGroupedTogether()
+		{
+			// Two quote issues from the same block (same context) → one group
+			var path = LogFile(
+				"page1.html|QUOTE_SYSTEM_MIX|Multiple systems: German-double, English-double|...excerpt...",
+				"page1.html|QUOTE_UNMATCHED|Opener at position 5|...excerpt..."
+			);
+			var groups = Groups(path).Where(g => g.DisplayType == "QUOTE ISSUES").ToList();
+			Assert.Single(groups);
+		}
+
+		[Fact]
+		public void BuildGroups_QuoteIssues_DifferentBlocks_SeparateGroups()
+		{
+			// Two quote issues from different blocks (different context) → two groups
+			var path = LogFile(
+				"page1.html|QUOTE_SYSTEM_MIX|Multiple systems|...block1...",
+				"page1.html|QUOTE_UNMATCHED|Opener at position 5|...block2..."
+			);
+			var groups = Groups(path).Where(g => g.DisplayType == "QUOTE ISSUES").ToList();
+			Assert.Equal(2, groups.Count);
+		}
+
+		[Fact]
+		public void BuildGroups_QuoteIssues_DifferentPages_SeparateGroups()
+		{
+			var path = LogFile(
+				"page1.html|QUOTE_SYSTEM_MIX|Multiple systems|...excerpt...",
+				"page2.html|QUOTE_SYSTEM_MIX|Multiple systems|...excerpt..."
+			);
+			var groups = Groups(path).Where(g => g.DisplayType == "QUOTE ISSUES").ToList();
+			Assert.Equal(2, groups.Count);
+		}
+
+		[Fact]
+		public void BuildGroups_QuoteIssues_DisplayLinesShowHumanNote()
+		{
+			var path = LogFile(
+				"page1.html|QUOTE_SYSTEM_MIX|Multiple quote systems: German-double, English-double|...excerpt...",
+				"page1.html|QUOTE_UNMATCHED|Opener at position 5 has no closer|...excerpt...",
+				"page1.html|QUOTE_UNMATCHED|Opener at position 9 has no closer|...excerpt..."
+			);
+			var group = Groups(path).First(g => g.DisplayType == "QUOTE ISSUES");
+
+			var note = group.DisplayLines.Single(l => l.StartsWith("Note : ", System.StringComparison.Ordinal));
+			Assert.Contains("mixed German + English double quotes", note);
+			Assert.Contains("2 unclosed openers", note);
+			// The raw CONSTANT_CASE detector tokens no longer reach the console card.
+			Assert.DoesNotContain(group.DisplayLines, l => l.Contains("QUOTE_UNMATCHED"));
+			Assert.DoesNotContain(group.DisplayLines, l => l.Contains("QUOTE_SYSTEM_MIX"));
+		}
+
+		[Fact]
+		public void SynthesizeQuoteNote_NamesSystemsAndCountsUnmatched()
+		{
+			var entries = new System.Collections.Generic.List<(string, string, string, string)>
+			{
+				("p.html", "QUOTE_SYSTEM_MIX", "Multiple quote systems: German-double, English-double", ""),
+				("p.html", "QUOTE_UNMATCHED", "Opener at 971 has no closer", ""),
+				("p.html", "QUOTE_UNMATCHED", "Opener at 981 has no closer", ""),
+			};
+
+			Assert.Equal(
+				"mixed German + English double quotes; 2 unclosed openers",
+				ContentQualityTriage.SynthesizeQuoteNote(entries));
+		}
+
+		[Fact]
+		public void BuildGroups_QuoteIssues_WordContainsBothTypes()
+		{
+			var path = LogFile(
+				"page1.html|QUOTE_SYSTEM_MIX|Multiple systems|...excerpt...",
+				"page1.html|QUOTE_UNMATCHED|Opener at position 5|...excerpt..."
+			);
+			var group = Groups(path).First(g => g.DisplayType == "QUOTE ISSUES");
+			Assert.Contains("QUOTE_SYSTEM_MIX", group.Word);
+			Assert.Contains("QUOTE_UNMATCHED", group.Word);
+		}
+
+		// ── SPLIT_WORD_ANCHOR grouping ────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_SplitWordAnchor_OneGroupPerPage()
+		{
+			var path = LogFile(
+				"page1.html|SPLIT_WORD_ANCHOR|Stray char: 'r'|...excerpt...",
+				"page2.html|SPLIT_WORD_ANCHOR|Stray char: 'r'|...excerpt..."
+			);
+			var groups = Groups(path).Where(g => g.DisplayType == "SPLIT_WORD_ANCHOR").ToList();
+			Assert.Equal(2, groups.Count);
+		}
+
+		[Fact]
+		public void BuildGroups_SplitWordAnchor_IsTranslationFalse()
+		{
+			var path = LogFile(
+				"page1.html|SPLIT_WORD_ANCHOR|Stray char: 'r'|...excerpt..."
+			);
+			var group = Groups(path).First(g => g.DisplayType == "SPLIT_WORD_ANCHOR");
+			Assert.False(group.IsTranslation);
+		}
+
+		// ── POTENTIAL_TRANSLATION grouping ────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_PotentialTranslation_OneGroupPerPage()
+		{
+			var path = LogFile(
+				"page1.html|POTENTIAL_TRANSLATION|p[#text] (passes en dictionary)|English content here",
+				"page1.html|POTENTIAL_TRANSLATION|h2[#text] (passes en dictionary)|More English content",
+				"page2.html|POTENTIAL_TRANSLATION|p[#text] (passes en dictionary)|More English content"
+			);
+			var groups = Groups(path).Where(g => g.DisplayType == "POTENTIAL_TRANSLATION").ToList();
+			Assert.Equal(2, groups.Count);
+		}
+
+		[Fact]
+		public void BuildGroups_PotentialTranslation_IsTranslationTrue()
+		{
+			var path = LogFile(
+				"page1.html|POTENTIAL_TRANSLATION|p[#text] (passes en dictionary)|English content"
+			);
+			var group = Groups(path).First(g => g.DisplayType == "POTENTIAL_TRANSLATION");
+			Assert.True(group.IsTranslation);
+		}
+
+		[Fact]
+		public void BuildGroups_PotentialTranslation_DisplayLinesContainCount()
+		{
+			var path = LogFile(
+				"page1.html|POTENTIAL_TRANSLATION|p[#text] (passes en)|Content one",
+				"page1.html|POTENTIAL_TRANSLATION|h2[#text] (passes en)|Content two",
+				"page1.html|POTENTIAL_TRANSLATION|span[#text] (passes en)|Content three"
+			);
+			var group = Groups(path).First(g => g.DisplayType == "POTENTIAL_TRANSLATION");
+			Assert.Contains(group.DisplayLines, l => l.Contains("3 element"));
+		}
+
+		// ── LIGATURE grouping ─────────────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_Ligature_OneGroupPerPage()
+		{
+			var path = LogFile(
+				"page1.html|LIGATURE|U+FB01|...fi ligature...",
+				"page2.html|LIGATURE|U+FB02|...fl ligature..."
+			);
+			var groups = Groups(path).Where(g => g.DisplayType == "LIGATURE").ToList();
+			Assert.Equal(2, groups.Count);
+		}
+
+		// ── ToIssueRecords (#332: 1:N promotion) ──────────────────────────────
+
+		[Fact]
+		public void ToIssueRecords_StatusNew_CorrectFields()
+		{
+			var path = LogFile(
+				"page1.html|SPLIT_WORD_ANCHOR|Stray char: 'r'|...excerpt..."
+			);
+			var group = Groups(path).First();
+			// Single-type group → exactly one record (1:1, unchanged behavior).
+			var record = Assert.Single(group.ToIssueRecords("new", string.Empty));
+			Assert.Equal("triage", record.Source);
+			Assert.Equal("QUALITY", record.Type);
+			Assert.Equal("new", record.Status);
+			Assert.Equal("SPLIT_WORD_ANCHOR", record.Word);
+		}
+
+		[Fact]
+		public void ToIssueRecords_UserCommentOverridesBuiltComment()
+		{
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context..."
+			);
+			var group = Groups(path).First();
+			var record = group.ToIssueRecords("wontfix", "my custom comment").First();
+			Assert.Equal("my custom comment", record.Comment);
+		}
+
+		[Fact]
+		public void ToIssueRecords_EmptyUserComment_UsesBuiltComment()
+		{
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context..."
+			);
+			var group = Groups(path).First();
+			var record = group.ToIssueRecords("new", string.Empty).First();
+			// Built comment references the log filename and pattern
+			Assert.Contains("10-content-quality-issues.log", record.Comment);
+			Assert.Contains("pattern: %(", record.Comment);
+		}
+
+		// ── Mixed issue types ─────────────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_MixedTypes_AllGroupsPresent()
+		{
+			var path = LogFile(
+				"page1.html|UNWANTED_PATTERN|pattern: %(|...context...",
+				"page2.html|QUOTE_SYSTEM_MIX|Multiple systems|...excerpt...",
+				"page3.html|SPLIT_WORD_ANCHOR|Stray char: 'r'|...excerpt...",
+				"page4.html|POTENTIAL_TRANSLATION|p[#text] (passes en)|Content",
+				"page5.html|LIGATURE|U+FB01|...fi..."
+			);
+			var groups = Groups(path);
+			Assert.Contains(groups, g => g.DisplayType == "UNWANTED_PATTERN");
+			Assert.Contains(groups, g => g.DisplayType == "QUOTE ISSUES");
+			Assert.Contains(groups, g => g.DisplayType == "SPLIT_WORD_ANCHOR");
+			Assert.Contains(groups, g => g.DisplayType == "POTENTIAL_TRANSLATION");
+			Assert.Contains(groups, g => g.DisplayType == "LIGATURE");
+		}
+
+		// ── #332: quote groups promote one record per per-type key ────────────
+
+		[Fact]
+		public void QuoteGroup_MultipleTypesOnePage_PromotesOneRecordPerType()
+		{
+			// A page-block with SYSTEM_MIX + two UNMATCHED collapses to ONE
+			// triage group, but must promote TWO records (one per distinct
+			// type) so each matches the detector's per-type key.
+			var path = LogFile(
+				"p.html|QUOTE_SYSTEM_MIX|Multiple systems|SHARED_BLOCK_CONTEXT",
+				"p.html|QUOTE_UNMATCHED|Opener at 971|SHARED_BLOCK_CONTEXT",
+				"p.html|QUOTE_UNMATCHED|Opener at 981|SHARED_BLOCK_CONTEXT"
+			);
+			var group = Assert.Single(Groups(path).Where(g => g.DisplayType == "QUOTE ISSUES"));
+			var records = group.ToIssueRecords("pending", string.Empty).ToList();
+
+			// Two DISTINCT types → two records (the duplicate UNMATCHED collapses).
+			Assert.Equal(2, records.Count);
+			Assert.Contains(records, r => r.Word == "QUOTE_SYSTEM_MIX");
+			Assert.Contains(records, r => r.Word == "QUOTE_UNMATCHED");
+			Assert.All(records, r => Assert.Equal("pending", r.Status));
+		}
+
+		[Fact]
+		public void QuoteGroup_PromotedKeys_MatchDetectorPerTypeKeys()
+		{
+			// The crux of #332: a ticketed quote group's keys must equal the
+			// keys the detector auto-promotes per type, so the round-trip
+			// suppresses them. Composite "TYPE1+TYPE2" keys would match nothing.
+			var path = LogFile(
+				"p.html|QUOTE_SYSTEM_MIX|Multiple systems|CTX",
+				"p.html|QUOTE_UNMATCHED|Opener at 971|CTX"
+			);
+			var group = Assert.Single(Groups(path).Where(g => g.DisplayType == "QUOTE ISSUES"));
+			var keys = group.TrackingKeys("pending").ToList();
+
+			// Per-type keys, NOT a composite. Url resolution falls back to the
+			// filename when the cache isn't loaded (test mode), so match on the
+			// type suffix.
+			Assert.Equal(2, keys.Count);
+			Assert.Contains(keys, k => k.EndsWith("|QUOTE_SYSTEM_MIX"));
+			Assert.Contains(keys, k => k.EndsWith("|QUOTE_UNMATCHED"));
+			Assert.DoesNotContain(keys, k => k.Contains("+"));   // no composite key
+		}
+
+		[Fact]
+		public void NonQuoteGroup_PromotesExactlyOneRecord()
+		{
+			// Single-type groups keep 1:1 promotion — TrackingWords is null, so
+			// EffectiveWords falls back to the single Word. Guards against the
+			// 1:N change altering non-quote behavior.
+			var path = LogFile(
+				"p.html|UNWANTED_PATTERN|pattern: %(|ctx"
+			);
+			var group = Groups(path).First();
+			var records = group.ToIssueRecords("pending", string.Empty).ToList();
+			Assert.Single(records);
+			Assert.Equal("UNWANTED_PATTERN:pattern: %(", records[0].Word);
+		}
+
+		// ── ComputeQuoteSpans ──────────────────────────────────────────────────
+
+		[Fact]
+		public void ComputeQuoteSpans_MarksEveryQuoteGlyph_AsContextByDefault()
+		{
+			// Two curly quotes; no triggers supplied → both are context, none trigger.
+			var text = "say \u201Chi\u201D ok";
+			var spans = ContentQualityTriage.ComputeQuoteSpans(text, []);
+			Assert.Equal(2, spans.Count);
+			Assert.All(spans, s => Assert.False(s.IsTrigger));
+			Assert.All(spans, s => Assert.Equal(1, s.Length));
+			Assert.Equal(text.IndexOf('\u201C'), spans[0].Start);
+			Assert.Equal(text.IndexOf('\u201D'), spans[1].Start);
+		}
+
+		[Fact]
+		public void ComputeQuoteSpans_MarksOnlyTriggerPosition_AsTrigger()
+		{
+			// Three U+2019: two possessive apostrophes + the flagged orphan. Only the
+			// supplied trigger position is red; the others stay context (blue).
+			var text = "users\u2019 and firms\u2019 data\u2019";
+			var orphan = text.LastIndexOf('\u2019');
+			var spans = ContentQualityTriage.ComputeQuoteSpans(text, new[] { orphan });
+			Assert.Equal(3, spans.Count);
+			Assert.Single(spans, s => s.IsTrigger);
+			Assert.True(spans.Single(s => s.IsTrigger).Start == orphan);
+		}
+
+		[Fact]
+		public void ComputeQuoteSpans_EmptyText_ReturnsEmpty()
+		{
+			Assert.Empty(ContentQualityTriage.ComputeQuoteSpans(string.Empty, new[] { 0 }));
+		}
+
+		// ── WORD_COLLISION grouping ───────────────────────────────────────────
+
+		[Fact]
+		public void BuildGroups_WordCollision_OneGroupPerPage()
+		{
+			var path = LogFile(
+				"page1.html|WORD_COLLISION|Inline <span> abuts bare text without separator — words merge|<span class=\"h2\">Basismodul</span>Inhalte des Moduls",
+				"page1.html|WORD_COLLISION|Inline <span> abuts bare text without separator — words merge|<span class=\"h2\">Wero</span>Lesen Sie hier",
+				"page2.html|WORD_COLLISION|Inline <span> abuts bare text without separator — words merge|<span>Foo</span>Bar baz");
+			var groups = Groups(path).Where(g => g.DisplayType == "WORD_COLLISION").ToList();
+			Assert.Equal(2, groups.Count);
+			Assert.All(groups, g => Assert.False(g.IsTranslation));
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_TrailingSeam_ThreeSpansInsideTagTail()
+		{
+			var html = "<span class=\"h2\">Basismodul</span>Inhalte des Moduls";
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans(html);
+			Assert.Equal(3, spans.Count);
+
+			var inside = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Inside);
+			Assert.Equal("Basismodul", html.Substring(inside.Start, inside.Length));
+
+			var tag = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Tag);
+			Assert.Equal("</span>", html.Substring(tag.Start, tag.Length));
+
+			var tail = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Tail);
+			Assert.Equal("Inhalte", html.Substring(tail.Start, tail.Length));
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_SpaceAfterTag_NoSpans()
+		{
+			// A space after </span> means a clean boundary, not a collision.
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans("<span>Basismodul</span> Inhalte");
+			Assert.Empty(spans);
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_BrSpacerInsideSpan_TextInsideBrSeparate()
+		{
+			// <span>Foo<br></span>Bar — the <br> spacer abuse inside the span.
+			// "Foo" stays Inside (light blue), the <br> becomes its own BrSpacer span.
+			var html = "<span>Foo<br></span>Bar baz";
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans(html);
+
+			var inside = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Inside);
+			Assert.Equal("Foo", html.Substring(inside.Start, inside.Length));
+
+			var br = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.BrSpacer);
+			Assert.Equal("<br>", html.Substring(br.Start, br.Length));
+
+			var tag = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Tag);
+			Assert.Equal("</span>", html.Substring(tag.Start, tag.Length));
+
+			var tail = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Tail);
+			Assert.Equal("Bar", html.Substring(tail.Start, tail.Length));
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_AttributedBr_CapturedWhole()
+		{
+			// Real shape from the bline/workflow chrome: <br class="bterm">.
+			var html = "<span>Foo<br class=\"bterm\"></span>Bar";
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans(html);
+			var br = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.BrSpacer);
+			Assert.Equal("<br class=\"bterm\">", html.Substring(br.Start, br.Length));
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_NonBrInnerTag_NotCarvedAsBrSpacer()
+		{
+			// A non-<br> inner tag (<b>) stays within Inside — only <br> is carved out.
+			var html = "<span>Foo<b>X</b></span>Bar";
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans(html);
+			Assert.DoesNotContain(spans, s => s.Kind == ConsoleUi.SplitSpanKind.BrSpacer);
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_LeadingSeam_ThreeSpansWord1TagWord2()
+		{
+			// Leading seam: bare "Android" abuts opening <span><sup> whose text starts
+			// uppercase ("TM"). The trailing path finds nothing (no </tag> before an
+			// uppercase), so the leading fallback paints WORD1 / opening tag(s) / WORD2.
+			var html = "Android<span class=\"small\"><sup>TM</sup></span>";
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans(html);
+			Assert.Equal(3, spans.Count);
+
+			var inside = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Inside);
+			Assert.Equal("Android", html.Substring(inside.Start, inside.Length));
+
+			var tag = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Tag);
+			Assert.Equal("<span class=\"small\"><sup>", html.Substring(tag.Start, tag.Length));
+
+			var tail = spans.Single(s => s.Kind == ConsoleUi.SplitSpanKind.Tail);
+			Assert.Equal("TM", html.Substring(tail.Start, tail.Length));
+		}
+
+		[Fact]
+		public void ComputeWordCollisionSpans_LeadingSeam_LowercaseAfterTag_NoSpans()
+		{
+			// Opening tag after a lowercase word, but the inside text is lowercase too —
+			// no lower→Upper merge, so nothing is painted.
+			var spans = ContentQualityTriage.ComputeWordCollisionSpans("wort<span>lower text");
+			Assert.Empty(spans);
+		}
+	}
+}

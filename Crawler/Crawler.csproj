@@ -1,0 +1,72 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+
+		<EnableNuGetPackageVulnerabilityAnalysis>false</EnableNuGetPackageVulnerabilityAnalysis>
+		<NoWarn>NU1900;</NoWarn>
+		<StartupObject>Crawler.Program</StartupObject>
+		<NuGetAudit>False</NuGetAudit>
+		<PublishTrimmed>False</PublishTrimmed>
+		<JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+		<ProduceReferenceAssembly>False</ProduceReferenceAssembly>
+		<PublishAot>False</PublishAot>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+		<DebugType>full</DebugType>
+		<Optimize>False</Optimize>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+		<DebugType>full</DebugType>
+		<Optimize>False</Optimize>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<InternalsVisibleTo Include="Crawler.Tests" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
+		<PackageReference Include="System.Text.Json" Version="10.0.3" />
+		<PackageReference Include="WeCantSpell.Hunspell" Version="7.0.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Include="licenses\MIT.txt" />
+		<EmbeddedResource Include="licenses\MPL-1.1.txt" />
+		<EmbeddedResource Include="licenses\WeCantSpell.Hunspell.txt" />
+		<EmbeddedResource Include="licenses\THIRD-PARTY-NOTICES.txt" />
+	</ItemGroup>
+	
+	<ItemGroup>
+		<TrimmerRoot Include="Crawler.Config" />
+		<TrimmerRoot Include="Crawler.TagItem" />
+		<TrimmerRoot Include="Crawler.ReplacementItem" />
+		<TrimmerRoot Include="Crawler.TagList" />
+		<TrimmerRoot Include="Crawler.ReplacementList" />
+		<TrimmerRoot Include="Crawler.Config.Url" />
+		<TrimmerRoot Include="Crawler.TagItem" />
+		<TrimmerRoot Include="Crawler.ApostropheElisionProfile" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Update="*.json">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+		<Content Include="dictionaries\**\*.aff;dictionaries\**\*.dic">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+
+	<ProjectExtensions>
+		<VisualStudio>
+			<UserProperties />
+		</VisualStudio>
+	</ProjectExtensions>
+	
+</Project>
