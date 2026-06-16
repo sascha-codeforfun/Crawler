@@ -1,6 +1,6 @@
 name: Build & Release
 
-# Builds on every push to main and on manual runs.
+# Builds on every push to master and on manual runs.
 # Pushing a tag like v1.0.0 also creates a GitHub Release with the
 # packaged binary attached.
 #
@@ -17,8 +17,8 @@ permissions:
 
 env:
   DOTNET_VERSION: '8.0.x'                         # matches the net8.0 target framework
-  SOLUTION_PATH: 'Crawler/Crawler.sln'            # solution (built + tested)
-  PROJECT_PATH:  'Crawler/Crawler/Crawler.csproj' # the app project (published)
+  SOLUTION_PATH: 'Crawler.sln'            # solution (built + tested)
+  PROJECT_PATH:  'Crawler/Crawler.csproj' # the app project (published)
   APP_NAME:      'Crawler'                         # artifact / zip name
   CONFIGURATION: 'Release'
   RUNTIME:       'win-x64'
@@ -70,7 +70,7 @@ jobs:
         run: |
           Get-ChildItem publish -Recurse -Filter *.pdb | Remove-Item -Force
           if (Test-Path 'LICENSE.txt') { Copy-Item 'LICENSE.txt' publish/ }
-          if (Test-Path 'Crawler/Crawler/licenses') { Copy-Item 'Crawler/Crawler/licenses' publish/ -Recurse }
+          if (Test-Path 'Crawler/licenses') { Copy-Item 'Crawler/licenses' publish/ -Recurse }
           Compress-Archive -Path publish/* -DestinationPath "${{ env.APP_NAME }}-${{ env.RUNTIME }}.zip" -Force
 
       # Always uploads a downloadable artifact to the workflow run.
