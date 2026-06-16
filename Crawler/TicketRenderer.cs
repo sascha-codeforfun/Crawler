@@ -293,7 +293,7 @@ namespace Crawler
 		/// Returns the host of the first <paramref name="allowedSubdomains"/> base
 		/// URL whose host equals the host of <paramref name="url"/>, or
 		/// empty if none match / inputs are unusable. Compares host only (scheme
-		/// and path ignored). Used to label the Herkunft of a page that has no
+		/// and path ignored). Used to label the Origin of a page that has no
 		/// CMS-CSV row but is in scope via an allowed subdomain. Defensive: never
 		/// throws on a malformed URL — a ticket must always render.
 		/// </summary>
@@ -332,19 +332,19 @@ namespace Crawler
 
 		/// Renders the page-level provenance shell once per ticket.
 		/// Substitution is field-independent: each placeholder's emptiness is its
-		/// own fact, with NO inference between fields (a page can be "vererbt"
-		/// with no module, or have a module with any Herkunft — the two are
+		/// own fact, with NO inference between fields (a page can be "inherited"
+		/// with no module, or have a module with any Origin — the two are
 		/// unrelated). Collapse rules, applied per placeholder:
 		///   • {Package} empty  → the immediately-preceding literal run up to and
-		///       including its " : " label is removed (e.g. " - Modul: " before
-		///       an empty {Package} disappears, leaving "Herkunft: vererbt").
+		///       including its " : " label is removed (e.g. " - Module: " before
+		///       an empty {Package} disappears, leaving "Origin: inherited").
 		///   • {SpecialInfo} empty → its leading separator space is removed so no
-		///       trailing space dangles after the module/Herkunft text.
+		///       trailing space dangles after the module/Origin text.
 		///   • {CmsLink} empty  → the whole line carrying it is dropped (with a
 		///       directly-preceding blank line), since "CMS: " alone is noise.
 		/// Any line left blank after substitution collapses with its neighbours
 		/// (max one blank run). The operator template stays simple — it writes
-		/// the natural "Herkunft: {Location} - Modul: {Package} {SpecialInfo}"
+		/// the natural "Origin: {Location} - Module: {Package} {SpecialInfo}"
 		/// and "CMS: {CmsLink}"; the renderer handles the sparse cases.
 		/// </summary>
 		private static string RenderShell(
@@ -375,9 +375,9 @@ namespace Crawler
 				var line = rawLine;
 
 				// {Package} empty → remove the literal label run immediately
-				// preceding the placeholder (" - Modul: " → gone). We strip from
+				// preceding the placeholder (" - Module: " → gone). We strip from
 				// the start of that separator run through the placeholder token,
-				// keying ONLY on Package emptiness — never on Herkunft.
+				// keying ONLY on Package emptiness — never on Origin.
 				if (string.IsNullOrEmpty(meta.Package) && line.Contains("{Package}"))
 				{
 					line = RemoveEmptyLabeledFragment(line, "{Package}");
@@ -421,7 +421,7 @@ namespace Crawler
 		/// Removes the labelled fragment ending in <paramref name="placeholder"/>
 		/// when that placeholder is empty: scans back from the placeholder to the
 		/// nearest preceding separator (" - ") and strips from there through the
-		/// placeholder, so " - Modul: {Package}" → "". If no preceding " - "
+		/// placeholder, so " - Module: {Package}" → "". If no preceding " - "
 		/// separator exists the placeholder is simply removed (leaving the rest of
 		/// the line intact). Keyed purely on the placeholder; no field inference.
 		/// </summary>
@@ -457,7 +457,7 @@ namespace Crawler
 
 			// When the metadata lookup found no row (empty Location) but the page
 			// is from an explicitly-allowed subdomain, surface that as the
-			// Herkunft value instead of an empty label — it tells the operator the
+			// Origin value instead of an empty label — it tells the operator the
 			// page is in scope via UrlSubdomainsAllowed, not missing from the CSV
 			// by mistake. Keyed purely on host match; no site-specific literals.
 			if (string.IsNullOrEmpty(meta.Location))

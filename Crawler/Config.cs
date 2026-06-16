@@ -1674,7 +1674,7 @@ namespace Crawler
 		/// pasting into ticket systems whose title field has no room for
 		/// the prose body. Supports placeholders:
 		///   {Prefix}        — value of TicketPrefix (e.g. "WEBSITE").
-		///   {IssueType}     — worst-two TicketIssueTypes labels present (e.g. "404-Fehler/Schreibfehler").
+		///   {IssueType}     — worst-two TicketIssueTypes labels present (e.g. "404/spelling errors").
 		///   {PathIndicator} — page URL stripped of domain and query string,
 		///                     then shortened per PathShortenSegments (see below).
 		/// Empty placeholders collapse their surrounding " - " separators
@@ -1734,7 +1734,7 @@ namespace Crawler
 		/// finding-type sections. Placeholders: {Url}, {Location},
 		/// {Package}, {CmsLink}, {SpecialInfo}. Lines whose only dynamic value
 		/// resolves empty are collapsed automatically (e.g. a local file with no
-		/// Modul/CMS), so the template need not branch for that case. Leave empty
+		/// module/CMS), so the template need not branch for that case. Leave empty
 		/// to omit the shell. Configure in config.private.json.
 		/// </summary>
 		public string TicketShellTemplate { get; set; } = string.Empty;
