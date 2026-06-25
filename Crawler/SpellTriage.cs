@@ -2,7 +2,9 @@ namespace Crawler
 {
 	using System.Collections.Generic;
 	using System.Text;
+	using System.Text.RegularExpressions;
 	using Crawler.SpellCheck;
+	using Crawler.Urls;
 
 	/// <summary>
 	/// Interactive console triage for spelling findings. The detected set is this run's in-memory
@@ -146,7 +148,188 @@ namespace Crawler
 		}
 
 		/// <summary>
-		/// Resolves the raw HTML file path for an entry's URL via UrlCache. Returns
+		/// Renders the CONTENT_BEFORE_DOCTYPE bag as one rollup card and applies [T]/[S]. [T]
+		/// fan-outs a pending SPELLING row per (url,word) tagged with the marker (gone-is-gone
+		/// retires them when the pages heal), then reads this run's sidecars
+		/// and writes the ticket text. [S]/[Q] leaves the bag undecided so it nags next run. No
+		/// Wontfix: a structurally broken page must keep surfacing until fixed or ticketed. Returns
+		/// the number of findings ticketed (0 on skip).
+		/// </summary>
+		private static int HandleContentBeforeDoctypeBag(
+			List<WordTicket> bag,
+			List<IssueTracking.IssueRecord> ledger,
+			string issueTrackingPath,
+			string downloadDirectory,
+			IReadOnlyList<CrawlHistoryDiagnosticHeaderExtractor>? headerExtractors,
+			HashSet<string> decidedKeys,
+			string today)
+		{
+			if (bag.Count == 0)
+			{
+				return 0;
+			}
+
+			var pages = bag
+				.Select(t => t.Url)
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.OrderBy(u => u, StringComparer.Ordinal)
+				.ToList();
+
+			lock (Logger.ConsoleLock)
+			{
+				ConsoleUi.WriteDivider();
+				ConsoleUi.WriteWarning($"⚠ {ContentBeforeDoctypeBag.Marker} — {bag.Count} finding(s) on {pages.Count} page(s)");
+				ConsoleUi.WriteInfo("Content before <!doctype> corrupts the parse upstream of all content; the spelling");
+				ConsoleUi.WriteInfo("findings here are parse artifacts, not typos. Fix the response emission, not the words.");
+				foreach (var u in pages)
+				{
+					ConsoleUi.WriteLine($"  {u}");
+				}
+
+				ConsoleUi.WriteDivider();
+			}
+
+			var choices = new List<ChoiceOption>
+			{
+				new(ConsoleKey.T, "Ticket"),
+				new(ConsoleKey.S, "Skip"),
+				new(ConsoleKey.Q, "Quit"),
+			};
+
+			ConsoleKey input = ConsoleTriage.Ask(prompt: string.Empty, choices: choices);
+
+			if (input != ConsoleKey.T)
+			{
+				ConsoleUi.WriteSkipped($"→ {ContentBeforeDoctypeBag.Marker} left for next run");
+				ConsoleUi.WriteBlank();
+				return 0;
+			}
+
+			var ticketRef = ConsoleTriage.AskFreeText("Ticket reference (optional, Enter to skip): ");
+
+			foreach (var t in bag)
+			{
+				UpsertSpelling(ledger, BuildDecision(t, "pending", ticketRef, ContentBeforeDoctypeBag.Marker, today));
+				decidedKeys.Add(SpellingKey(t.Url, t.Word));
+			}
+
+			IssueTracking.Save(issueTrackingPath, ledger);
+
+			var ticketText = BuildContentBeforeDoctypeTicketText(bag, pages, downloadDirectory, headerExtractors);
+			WriteTicketTextLog(issueTrackingPath, ticketText);
+
+			lock (Logger.ConsoleLock)
+			{
+				var label = $"→ {ContentBeforeDoctypeBag.Marker} ticketed — {bag.Count} finding(s) on {pages.Count} page(s)";
+				if (!string.IsNullOrEmpty(ticketRef))
+				{
+					label += $" [{ticketRef}]";
+				}
+
+				ConsoleUi.WriteActionRequired(label);
+				ConsoleUi.WriteBlank();
+				ConsoleUi.WriteInfo("Ticket text (also written to ticketText.log):");
+				foreach (var line in ticketText.Split('\n'))
+				{
+					ConsoleUi.WriteLine(line);
+				}
+
+				ConsoleUi.WriteBlank();
+			}
+
+			return bag.Count;
+		}
+
+		/// <summary>
+		/// Reads this run's .header sidecars for the bagged pages and assembles the ticket text. If
+		/// diagnostic header extractors are configured, their patterns are compiled and used to group
+		/// the pages (an invalid pattern is skipped). Missing/unreadable sidecar → page kept with a
+		/// "(sidecar unavailable)" marker.
+		/// </summary>
+		private static string BuildContentBeforeDoctypeTicketText(
+			List<WordTicket> bag,
+			List<string> pages,
+			string downloadDirectory,
+			IReadOnlyList<CrawlHistoryDiagnosticHeaderExtractor>? headerExtractors)
+		{
+			var compiled = new List<(string Label, Regex Pattern)>();
+			if (headerExtractors != null)
+			{
+				foreach (var ex in headerExtractors)
+				{
+					if (string.IsNullOrEmpty(ex.Label) || string.IsNullOrEmpty(ex.Pattern))
+					{
+						continue;
+					}
+
+					try
+					{
+						compiled.Add((ex.Label, new Regex(ex.Pattern)));
+					}
+					catch (ArgumentException)
+					{
+						// Skip an invalid pattern rather than failing the run.
+					}
+				}
+			}
+
+			var pageDiagnostics = new List<ContentBeforeDoctypeBag.PageDiagnostics>();
+			foreach (var url in pages)
+			{
+				var sidecar = ResolveSidecarPath(url, downloadDirectory);
+				string? text = null;
+				if (!string.IsNullOrEmpty(sidecar) && File.Exists(sidecar))
+				{
+					try { text = File.ReadAllText(sidecar, Encoding.UTF8); }
+					catch { text = null; }
+				}
+
+				pageDiagnostics.Add(text == null
+					? new ContentBeforeDoctypeBag.PageDiagnostics(
+						url, null, null, System.Array.Empty<string>(),
+						System.Array.Empty<(string, string)>(), SidecarFound: false)
+					: ContentBeforeDoctypeBag.DiagnosticsFromSidecarText(url, text, compiled));
+			}
+
+			return ContentBeforeDoctypeBag.BuildTicketText(pageDiagnostics, bag.Count);
+		}
+
+		/// <summary>The .header sidecar path for a page (foo.html → foo.header), or empty if unresolved.</summary>
+		private static string ResolveSidecarPath(string url, string downloadDirectory)
+		{
+			if (string.IsNullOrEmpty(downloadDirectory))
+			{
+				return string.Empty;
+			}
+
+			var fn = Cache.FilenameFor(url);
+			if (string.IsNullOrEmpty(fn))
+			{
+				return string.Empty;
+			}
+
+			var raw = Path.Combine(downloadDirectory, fn);
+			return Path.ChangeExtension(raw, HeaderSidecar.HeaderSidecarExtension.TrimStart('.'));
+		}
+
+		/// <summary>Appends the ticket text to ticketText.log beside IssueTracking.log. Never throws.</summary>
+		private static void WriteTicketTextLog(string issueTrackingPath, string ticketText)
+		{
+			try
+			{
+				var dir = Path.GetDirectoryName(issueTrackingPath);
+				var path = Path.Combine(string.IsNullOrEmpty(dir) ? "." : dir, "ticketText.log");
+				var header = $"=== {ContentBeforeDoctypeBag.Marker} · {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC ===\n";
+				File.AppendAllText(path, header + ticketText + "\n", Encoding.UTF8);
+			}
+			catch
+			{
+				// The ticket text is also shown on the console; a log-write failure must not break triage.
+			}
+		}
+
+		/// <summary>
+		/// Resolves the raw HTML file path for an entry's URL via Cache. Returns
 		/// empty string when downloadDirectory is unset or the file is not present —
 		/// the absence sentinel that gates whether [M] More is offered.
 		/// </summary>
@@ -157,7 +340,7 @@ namespace Crawler
 				return string.Empty;
 			}
 
-			var fn = UrlCache.GetFilenameForUrl(url);
+			var fn = Cache.FilenameFor(url);
 			if (string.IsNullOrEmpty(fn))
 			{
 				return string.Empty;
@@ -192,7 +375,8 @@ namespace Crawler
 			IReadOnlyList<UrlHighlightRule> urlHighlightRules,
 			IReadOnlyList<WordTicket>? spellTickets = null,
 			string localisationComment = "Translation missing — content not localised for page language",
-			string downloadDirectory = "")
+			string downloadDirectory = "",
+			IReadOnlyList<CrawlHistoryDiagnosticHeaderExtractor>? headerExtractors = null)
 		{
 			// A null ticket set means this process's harvest did not complete (threw or did not
 			// run). There is nothing trustworthy to reconcile the ledger against, so bail without
@@ -247,10 +431,36 @@ namespace Crawler
 				.OrderBy(t => t.Word, StringComparer.OrdinalIgnoreCase)
 				.ToList();
 
-			if (toTriage.Count == 0)
+			// CONTENT_BEFORE_DOCTYPE bag: pull parse-shrapnel findings (page carries the universal
+			// MALFORMED_HTML:CONTENT_BEFORE_DOCTYPE sub-code AND the word has a non-word char) out of
+			// the per-word queue into one rollup card. Lossless — a clean split fragment
+			// (all letters) fails the char test and stays an individual card below.
+			var cbdUrls = ContentBeforeDoctypeBag.BuildContentBeforeDoctypeUrls(
+				File.Exists(contentQualityLogPath)
+					? File.ReadAllLines(contentQualityLogPath, Encoding.UTF8)
+					: Array.Empty<string>(),
+				CrawlIndex.LookUpUrlForFile);
+			var (cbdBag, cbdRest) = ContentBeforeDoctypeBag.Partition(toTriage, cbdUrls);
+			toTriage = cbdRest;
+
+			if (toTriage.Count == 0 && cbdBag.Count == 0)
 			{
 				ConsoleUi.WriteBlank();
 				ConsoleUi.WriteSuccess("No new spelling items to triage.");
+				return;
+			}
+
+			var today = DateTime.UtcNow.Date.ToString("yyyy-MM-dd");
+
+			// The CONTENT_BEFORE_DOCTYPE bag is shown first, as one rollup card: it is a structural
+			// defect (the page is broken upstream of content), not a set of typos. [T] fan-outs a
+			// pending row per (url,word) tagged with the marker (so gone-is-gone retires them when
+			// the pages heal) and writes the ticket text; [S] leaves it to nag next run.
+			int bagTicketed = HandleContentBeforeDoctypeBag(
+				cbdBag, ledger, issueTrackingPath, downloadDirectory, headerExtractors, decidedKeys, today);
+
+			if (toTriage.Count == 0)
+			{
 				return;
 			}
 
@@ -261,9 +471,8 @@ namespace Crawler
 			// Words added to a dictionary this session auto-resolve every later occurrence (the
 			// word will be gone next run, so it is never a ticket or a row).
 			var wordsAddedToDictionary = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-			var today = DateTime.UtcNow.Date.ToString("yyyy-MM-dd");
 			int current = 0;
-			int ticketed = 0, wontfixed = 0, dictionaried = 0, skipped = 0;
+			int ticketed = bagTicketed, wontfixed = 0, dictionaried = 0, skipped = 0;
 
 			foreach (var ticket in toTriage)
 			{
@@ -298,7 +507,17 @@ namespace Crawler
 				lock (Logger.ConsoleLock)
 				{
 					ConsoleUi.WriteDivider();
-					ConsoleUi.WriteCardHeader(current, toTriage.Count, "Word", ticket.Word);
+
+					// The lorem-ipsum placeholder finding carries the synthetic sentinel Word; tint it amber
+					// in the header so the operator reads it as a special-cased, non-typo finding. Every other
+					// word keeps the default (plain) header.
+					bool isPlaceholder = ticket.Word == ScriptSpellingTickets.PlaceholderWord;
+					ConsoleUi.WriteCardHeader(
+						current,
+						toTriage.Count,
+						"Word",
+						ticket.Word,
+						valueColor: isPlaceholder ? System.ConsoleColor.DarkYellow : (System.ConsoleColor?)null);
 					ConsoleUi.WriteUrlField(ticket.Url, urlHighlightRules);
 
 					// Every occurrence of this word on the page (from the engine ticket), each with
@@ -801,6 +1020,30 @@ namespace Crawler
 			var excerpt = occ.Excerpt ?? string.Empty;
 			if (excerpt.Length == 0)
 			{
+				return;
+			}
+
+			// Placeholder finding: the Word is the synthetic sentinel ("Lorem ipsum (placeholder text)"),
+			// not a substring of the excerpt, so the word-locator below cannot light it. Instead light the
+			// whole lorem-ipsum block (first filler token .. last) in the WCAG blue scheme — flagged, but
+			// filler, not a typo. Gated on the sentinel, so no other finding takes this path. Falls back to
+			// a plain Context line if no filler run is present (a placeholder finding always carries one).
+			if (word == ScriptSpellingTickets.PlaceholderWord)
+			{
+				var (fillerStart, fillerLength) = ScriptSpellingTickets.LocateFillerRun(excerpt);
+				if (fillerStart >= 0)
+				{
+					var fillerBefore = excerpt[..fillerStart];
+					var fillerHit = excerpt.Substring(fillerStart, fillerLength);
+					var fillerAfter = excerpt[(fillerStart + fillerLength)..];
+					ConsoleUi.WriteLineWithWcagHighlight(
+						$"{ConsoleUi.Indent}{"Context",-9}: {fillerBefore}", fillerHit, fillerAfter);
+				}
+				else
+				{
+					ConsoleUi.WriteField("Context", excerpt);
+				}
+
 				return;
 			}
 

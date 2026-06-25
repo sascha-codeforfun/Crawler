@@ -1,4 +1,5 @@
 using Xunit;
+using Crawler.Quality;
 
 namespace Crawler.Tests
 {
@@ -14,7 +15,7 @@ namespace Crawler.Tests
 	{
 		// ── Test helpers ─────────────────────────────────────────────────
 
-		private static ContentQuality.QualityIssue Issue(
+		private static QualityIssue Issue(
 			string filename = "page.html",
 			string issueType = "BARE_TEXT_IN_CONTAINER",
 			string detail = "Text directly inside <div> without block wrapper",

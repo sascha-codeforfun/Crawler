@@ -8,7 +8,7 @@ namespace Crawler.Tests
 	/// Tests for ContentQualityTriage.InjectEmptyAnchorMarker — the pure matcher
 	/// that injects the WCAG empty-link marker into essentially-empty anchors.
 	/// The matcher must mirror the detector's verdict in
-	/// ContentQuality.CheckMisplacedAnchors (InnerText.Trim() blank, no &lt;img&gt;):
+	/// MisplacedAnchors.Check (InnerText.Trim() blank, no &lt;img&gt;):
 	/// it marks exactly the anchors the detector flags, no more, no less.
 	///
 	/// Pure (no Console / no Logger), so no test collection is needed. Accessed

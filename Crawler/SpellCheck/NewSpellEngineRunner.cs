@@ -1,6 +1,7 @@
 namespace Crawler.SpellCheck
 {
 	using System;
+	using Crawler.Lexicon;
 	using System.Collections.Generic;
 	using System.IO;
 	using System.Linq;
@@ -44,13 +45,16 @@ namespace Crawler.SpellCheck
 			string wordTicketsDiagnosticPath,
 			string suppressionSuggestionsPath,
 			SpellCheckEngineConfig engineConfig,
-			IReadOnlyDictionary<string, DictionaryBundle> dictionaryBundles,
+			IReadOnlyDictionary<string, Bundle> dictionaryBundles,
 			Func<string, HtmlDocument, string> resolveLanguage,
 			IReadOnlyList<string> prefixesToStrip,
 			IReadOnlyList<string> fugenelemente,
 			Func<string, string> lookUpUrlForFile,
 			int maxDegreeOfParallelism,
-			WordCollisionMatcher? wordCollisions = null)
+			WordCollisionMatcher? wordCollisions = null,
+			Crawler.Suppressions.AnchorSplitSpellSuppression? anchorSplit = null,
+			Crawler.Suppressions.UnwantedPatternSpellSuppression? unwantedPattern = null,
+			Crawler.Suppressions.AdjacentAnchorSpellSuppression? adjacentAnchor = null)
 		{
 			var resolver = new BoilerplateResolver(engineConfig.BoilerplateGroups);
 
@@ -68,10 +72,10 @@ namespace Crawler.SpellCheck
 
 			// Read-only shared collaborators (verified safe for concurrent reads): the bundle lookup,
 			// the boilerplate resolver (all state built in its ctor), globalIgnore/knownDefects
-			// matchers, and Tools.CheckSpelling itself — the legacy engine already calls it from a
+			// matchers, and SpellChecker.Check itself — the legacy engine already calls it from a
 			// Parallel.ForEach. Bundles are hoisted out of the loop since they never change per page.
-			var bundlesConcrete = dictionaryBundles as Dictionary<string, DictionaryBundle>
-				?? new Dictionary<string, DictionaryBundle>(dictionaryBundles, StringComparer.OrdinalIgnoreCase);
+			var bundlesConcrete = dictionaryBundles as Dictionary<string, Bundle>
+				?? new Dictionary<string, Bundle>(dictionaryBundles, StringComparer.OrdinalIgnoreCase);
 
 			// Skip-set = the non-prose attributes (operator override if declared, else the built-in
 			// class/id/style default) PLUS the site-specific technical attributes. Case-insensitive.
@@ -192,7 +196,7 @@ namespace Crawler.SpellCheck
 				// pipeline on the finding.
 				var pairs = DomTraverser
 					.Traverse(doc, matcher, isCheckPage, skipAttributeNames, engineConfig.SpellCheckJavaScript.Enabled, metaContentNames, globalIgnore, htmlTagsToIgnore)
-					.SelectMany(run => RunChecker.Check(run, languages, checker.Check, knownDefects, engineConfig.HeuristicNonProseDataAttributeSuppression, wordCollisions?.WordsForFile(file.Filename), scriptTokensToFilter, scriptFallbackLanguage)
+					.SelectMany(run => RunChecker.Check(run, languages, checker.Check, knownDefects, engineConfig.HeuristicNonProseDataAttributeSuppression, wordCollisions?.WordsForFile(file.Filename), scriptTokensToFilter, scriptFallbackLanguage, anchorSplitTails: anchorSplit?.ForFile(file.Filename), unwantedPatternWords: unwantedPattern?.WordsForFile(file.Filename), adjacentAnchorJoins: adjacentAnchor?.ForFile(file.Filename))
 						.Select(finding => (run, finding)))
 					.ToList();
 
@@ -258,7 +262,7 @@ namespace Crawler.SpellCheck
 				// "aktien" → "Aktien"). Consulted only for single-token literals, on this one thread.
 				Func<string, bool> resemblesRealWord = word =>
 					!string.IsNullOrEmpty(word)
-					&& DictionaryBundle.CheckAny(char.ToUpperInvariant(word[0]) + word.Substring(1), dictionaryBundles.Values);
+					&& Bundle.CheckAny(char.ToUpperInvariant(word[0]) + word.Substring(1), dictionaryBundles.Values);
 
 				WriteView(suppressionSuggestionsPath, SuppressionSuggestionAnalyzer.Compose(allScriptInputs, resemblesRealWord));
 			}

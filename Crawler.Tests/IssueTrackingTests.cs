@@ -254,16 +254,17 @@ namespace Crawler.Tests
 		public void PromoteFrom404_NonExistentFile_ReturnsEmpty()
 		{
 			var result = IssueTracking.PromoteFrom404(
-				Path.Combine(_tempDir, "missing.log"));
+				Path.Combine(_tempDir, "missing"));
 			Assert.Empty(result);
 		}
 
 		[Fact]
 		public void PromoteFrom404_ValidLine_ParsedCorrectly()
 		{
-			var path = TmpFile("404sources.log",
-				"https://example.com/missing|https://example.com/page");
-			var result = IssueTracking.PromoteFrom404(path);
+			TmpFile("404sources" + IssueLogWriter.CsvSemicolonSuffix,
+				IssueLogWriter.ComposeCsvLine(';', "404Url", "SourceUrl"),
+				IssueLogWriter.ComposeCsvLine(';', "https://example.com/missing", "https://example.com/page"));
+			var result = IssueTracking.PromoteFrom404(Path.Combine(_tempDir, "404sources"));
 			Assert.Single(result);
 			Assert.Equal("404", result[0].Type);
 			Assert.Equal("https://example.com/missing", result[0].Url);
@@ -273,10 +274,11 @@ namespace Crawler.Tests
 		[Fact]
 		public void PromoteFrom404_DuplicateUrls_Deduplicated()
 		{
-			var path = TmpFile("404sources.log",
-				"https://example.com/missing|https://example.com/page1",
-				"https://example.com/missing|https://example.com/page2");
-			var result = IssueTracking.PromoteFrom404(path);
+			TmpFile("404sources" + IssueLogWriter.CsvSemicolonSuffix,
+				IssueLogWriter.ComposeCsvLine(';', "404Url", "SourceUrl"),
+				IssueLogWriter.ComposeCsvLine(';', "https://example.com/missing", "https://example.com/page1"),
+				IssueLogWriter.ComposeCsvLine(';', "https://example.com/missing", "https://example.com/page2"));
+			var result = IssueTracking.PromoteFrom404(Path.Combine(_tempDir, "404sources"));
 			Assert.Single(result);
 		}
 
@@ -286,27 +288,27 @@ namespace Crawler.Tests
 		public void PromoteFromSelfLink_NonExistentFile_ReturnsEmpty()
 		{
 			var result = IssueTracking.PromoteFromSelfLink(
-				Path.Combine(_tempDir, "missing.log"));
+				Path.Combine(_tempDir, "missing"));
 			Assert.Empty(result);
 		}
 
 		[Fact]
 		public void PromoteFromSelfLink_HeaderSkipped()
 		{
-			var path = TmpFile("selflink.log",
-				"File|FileUrl|LinkFound|ContextSnippet",
-				"page.html|https://example.com/page|https://example.com/page|Click here");
-			var result = IssueTracking.PromoteFromSelfLink(path);
+			TmpFile("selflink" + IssueLogWriter.CsvSemicolonSuffix,
+				IssueLogWriter.ComposeCsvLine(';', "File", "FileUrl", "LinkFound", "ContextSnippet"),
+				IssueLogWriter.ComposeCsvLine(';', "page.html", "https://example.com/page", "https://example.com/page", "Click here"));
+			var result = IssueTracking.PromoteFromSelfLink(Path.Combine(_tempDir, "selflink"));
 			Assert.Single(result);
 		}
 
 		[Fact]
 		public void PromoteFromSelfLink_ValidLine_ParsedCorrectly()
 		{
-			var path = TmpFile("selflink.log",
-				"File|FileUrl|LinkFound|ContextSnippet",
-				"page.html|https://example.com/page|https://example.com/page|Click here for more");
-			var result = IssueTracking.PromoteFromSelfLink(path);
+			TmpFile("selflink" + IssueLogWriter.CsvSemicolonSuffix,
+				IssueLogWriter.ComposeCsvLine(';', "File", "FileUrl", "LinkFound", "ContextSnippet"),
+				IssueLogWriter.ComposeCsvLine(';', "page.html", "https://example.com/page", "https://example.com/page", "Click here for more"));
+			var result = IssueTracking.PromoteFromSelfLink(Path.Combine(_tempDir, "selflink"));
 			Assert.Equal("SELFLINK", result[0].Type);
 			Assert.Equal("https://example.com/page", result[0].Url);
 			Assert.Equal("Click here for more", result[0].Excerpt);
@@ -550,7 +552,7 @@ namespace Crawler.Tests
 			// Only the good line should make it. The malformed lines have F(0)
 			// values that don't look like filenames — skipped.
 			// (The good line's URL resolution returns the filename itself when
-			// the UrlCache lookup fails for the test scenario; we just check
+			// the Cache lookup fails for the test scenario; we just check
 			// that we got ONE record back, with the right IssueType.)
 			Assert.Single(result);
 			Assert.Equal("QUALITY", result[0].Type);
@@ -578,7 +580,7 @@ namespace Crawler.Tests
 		[Fact]
 		public void PromoteFromQuality_FailedUrlLookup_FallsBackToFilename()
 		{
-			// When LookUpUrlForFile returns "error" (no UrlCache populated),
+			// When LookUpUrlForFile returns "error" (no Cache populated),
 			// the record's Url falls back to the filename rather than literally
 			// "error". Prevents the anonymous "Url=error" residue in IssueTracking.
 			var path = TmpFile("quality.log",

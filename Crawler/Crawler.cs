@@ -1,6 +1,9 @@
 namespace Crawler
 {
 	using HtmlAgilityPack;
+	using Crawler.Urls;
+	using Crawler.Logging;
+	using Crawler.Security;
 	using System;
 	using System.Collections.Concurrent;
 	using System.Collections.Generic;
@@ -31,6 +34,11 @@ namespace Crawler
 		public static void Initialize(string? proxyUrl, string? proxyUser, string? proxyPassword,
 			int maxConcurrentPageDownloads = 100, int maxConcurrentAssetDownloads = 200)
 		{
+			lock (containmentRefusalLock)
+			{
+				containmentRefusals.Clear();
+			}
+
 			pageSemaphore = new SemaphoreSlim(maxConcurrentPageDownloads);
 			assetSemaphore = new SemaphoreSlim(maxConcurrentAssetDownloads);
 			socketsHandler = new SocketsHttpHandler
@@ -62,6 +70,22 @@ namespace Crawler
 		// Track visited URLs thread-safely
 		private static readonly ConcurrentDictionary<string, byte> visited = new();
 
+		// Records each refused (out-of-root) write for the end-of-crawl summary.
+		// Containment is enforced unconditionally at the write itself
+		// (PathContainmentCheck); this is only the inspection trail, so adding to it
+		// never blocks a download. Reset per crawl in Initialize().
+		private static readonly object containmentRefusalLock = new();
+		private static readonly List<(string Url, string Reason)> containmentRefusals = [];
+
+		// [KEEP] Security boundary — the per-crawl host allowlist, set once at crawl
+		// launch (Crawl is the single fetch authority). The gate resolves each
+		// discovered reference and admits only exact allowed hosts. If unset (e.g.
+		// a direct test call), the download methods fall back to a policy built from
+		// the threaded websiteUrl + allowedSubdomains.
+		private static CrawlPolicy? crawlPolicy;
+
+		internal static void SetCrawlPolicy(CrawlPolicy policy) => crawlPolicy = policy;
+
 		// Retry policy parameters
 		private const int MaxRetries = 5;
 		private static readonly TimeSpan BaseDelay = TimeSpan.FromMilliseconds(200);
@@ -71,7 +95,7 @@ namespace Crawler
 		/// configured modal-query-parameter list:
 		///
 		///   - If any configured modal parameter substring appears in <paramref name="url"/>,
-		///     the URL is reinterpreted as a modal carrier — <c>Tools.ExtractModalUrl</c>
+		///     the URL is reinterpreted as a modal carrier — <c>Query.ExtractModalUrl</c>
 		///     unwraps the inner URL (the actual page the modal would display) using
 		///     <paramref name="websiteUrl"/> as the resolution base.
 		///   - Otherwise the URL is stripped of its query string entirely
@@ -103,7 +127,7 @@ namespace Crawler
 
 			if (matchedParam != null)
 			{
-				return Tools.ExtractModalUrl(url, websiteUrl, matchedParam);
+				return Query.ExtractModalUrl(url, websiteUrl, matchedParam);
 			}
 
 			return url.Split('?')[0];
@@ -129,10 +153,18 @@ namespace Crawler
 				return;
 			}
 
-			Tools.Log(url, "crawled", "info", log);
+			CrawlLogWriter.Write(url, "crawled", "info", log);
 
 			List<string> urlsToDownload = [];
 			List<string> assetsToDownload = [];
+
+			// Security gate inputs for this page: the base to resolve relative refs
+			// against (the page url), the host allowlist, and the host-scoped base
+			// the operational exclusion filter runs against (scheme://host of the
+			// configured site — path is a seed, not a fence).
+			var pageBase = new Uri(url);
+			var policy = crawlPolicy ?? CrawlPolicy.FromConfig(websiteUrl, allowedSubdomains);
+			var scopeBase = new Uri(websiteUrl).GetLeftPart(UriPartial.Authority);
 
 			await pageSemaphore.WaitAsync();
 			try
@@ -152,18 +184,14 @@ namespace Crawler
 						if (location != null)
 						{
 							var locationUrl = location.ToString();
-							Tools.Log(url, responseCode.ToString(), locationUrl, log);
+							CrawlLogWriter.Write(url, responseCode.ToString(), locationUrl, log);
 							// [KEEP] Security boundary — only follow redirects to the primary domain
 							// or an explicitly configured subdomain. Redirects to arbitrary external
 							// domains are silently dropped to prevent open-redirect crawl escapes.
-							var redirectAllowed = locationUrl.StartsWith(websiteUrl)
-								|| (allowedSubdomains is { Count: > 0 }
-									&& allowedSubdomains.Any(s =>
-										!string.IsNullOrWhiteSpace(s)
-										&& locationUrl.StartsWith(s, StringComparison.OrdinalIgnoreCase)));
-							if (redirectAllowed)
+							var redirectAdmission = CrawlGate.TryAdmit(locationUrl, pageBase, policy);
+							if (redirectAdmission.Admitted)
 							{
-								urlsToDownload.Add(locationUrl);
+								urlsToDownload.Add(redirectAdmission.AbsoluteUrl!);
 							}
 						}
 
@@ -182,11 +210,23 @@ namespace Crawler
 						// identity; its URL-derived extension is intentionally replaced —
 						// .htm/.htmlx no longer appear for pages. Assets (CrawlAsset) keep
 						// their real extensions and are not settled.
-						var baseName = Tools.GenerateFileName(url);
-						var fileName = Path.ChangeExtension(baseName, Tools.UnverifiedExtension.TrimStart('.'));
+						var baseName = Naming.GenerateFileName(url);
+						var fileName = Path.ChangeExtension(baseName, FileTypeClassifier.UnverifiedExtension.TrimStart('.'));
 						var downloadDir = Path.Combine(saveDirectory, "download");
 						Directory.CreateDirectory(downloadDir);
-						var filePath = Path.Combine(downloadDir, fileName);
+						// [KEEP] Security boundary — never write a body to a path that
+						// escapes the capture root. The crawled origin may be compromised
+						// and the file name is attacker-influenced, so containment is
+						// enforced here, at the write, independent of how the name was
+						// produced (see PathContainmentCheck / ReportContainmentRefusal).
+						var containment = PathContainmentCheck.Resolve(downloadDir, fileName);
+						if (!containment.Safe)
+						{
+							ReportContainmentRefusal(containment, url, downloadDir, log);
+							return;
+						}
+
+						var filePath = containment.FullPath;
 
 						using (var responseStream = await response.Content.ReadAsStreamAsync())
 						using (var fs = File.Create(filePath))
@@ -198,7 +238,7 @@ namespace Crawler
 						WriteHeaderSidecar(response, url, downloadDir, fileName);
 
 						// Raw saved row carries the Content-Type column (00-log format).
-						Tools.LogSavedRaw(url, fileName, log, source, contentType);
+						CrawlLogWriter.WriteSaved(url, fileName, log, source, contentType);
 
 						// Only attempt HTML link extraction when the server
 						// declared HTML content. Anchor hrefs reach PDFs, archives,
@@ -218,7 +258,7 @@ namespace Crawler
 						}
 
 						// Detect encoding from the saved bytes rather than assuming UTF-8,
-						// consistent with how RemoveHtmlByXPath reads files in Tools.cs.
+						// consistent with how MarkupFile.RemoveByXPath reads files.
 						var rawBytes = await File.ReadAllBytesAsync(filePath);
 						var encoding = DetectEncoding.FromBytes(rawBytes);
 						var content = encoding.GetString(rawBytes);
@@ -245,10 +285,16 @@ namespace Crawler
 								// the removal of the .pdf asset short-circuit below.
 								var hrefAttr = link.Attributes["href"];
 								var href = hrefAttr?.DeEntitizeValue ?? string.Empty;
-								// [KEEP] Security boundary — IsValidLink enforces primary domain + allowed subdomains only.
-								if (Tools.IsValidLink(href, websiteUrl, downloadExclusions, allowedSubdomains))
+								// [KEEP] Security boundary — IsInDownloadScope enforces primary domain + allowed subdomains only.
+								// Resolve-then-admit on the resolved URL (CrawlGate): document-relative
+								// links are followed; off-host / off-scheme / IP-literal refs are denied.
+								// IsInDownloadScope then applies the operator exclusions, host-scoped via
+								// scopeBase (a configured seed path is a start point, not a scope fence).
+								var linkAdmission = CrawlGate.TryAdmit(href, pageBase, policy);
+								if (linkAdmission.Admitted
+									&& Validity.IsInDownloadScope(linkAdmission.AbsoluteUrl!, scopeBase, downloadExclusions, allowedSubdomains))
 								{
-									var absoluteUrl = new Uri(new Uri(url), href).ToString();
+									var absoluteUrl = linkAdmission.AbsoluteUrl!;
 									// Strip fragment — never sent to server, prevents duplicate crawl entries.
 									var hashIdx = absoluteUrl.IndexOf('#');
 									if (hashIdx >= 0)
@@ -276,10 +322,15 @@ namespace Crawler
 							foreach (var asset in assets)
 							{
 								var src = asset.GetAttributeValue("src", asset.GetAttributeValue("href", string.Empty));
-								if (Uri.IsWellFormedUriString(src, UriKind.RelativeOrAbsolute) && !string.IsNullOrEmpty(src))
+								// [KEEP] Security boundary — assets were previously queued with only a
+								// well-formedness check (no scope gate), so an <img src> could pull
+								// off-host or IP-literal targets. Resolve-then-admit closes that, and
+								// the exclusion filter still applies (host-scoped via scopeBase).
+								var assetAdmission = CrawlGate.TryAdmit(src, pageBase, policy);
+								if (assetAdmission.Admitted
+									&& Validity.IsInDownloadScope(assetAdmission.AbsoluteUrl!, scopeBase, downloadExclusions, allowedSubdomains))
 								{
-									var absoluteAssetUrl = new Uri(new Uri(url), src).ToString();
-									assetsToDownload.Add(absoluteAssetUrl);
+									assetsToDownload.Add(assetAdmission.AbsoluteUrl!);
 								}
 							}
 						}
@@ -296,30 +347,33 @@ namespace Crawler
 								var canonicalHref = node.GetAttributeValue("href", string.Empty);
 								// [KEEP] Security boundary — canonical URLs are scope-checked before being
 								// seeded into the crawl queue to prevent following off-domain canonicals.
-								if (Tools.IsValidLink(canonicalHref, websiteUrl, downloadExclusions, allowedSubdomains))
+								var canonicalAdmission = CrawlGate.TryAdmit(canonicalHref, pageBase, policy);
+								if (canonicalAdmission.Admitted
+									&& Validity.IsInDownloadScope(canonicalAdmission.AbsoluteUrl!, scopeBase, downloadExclusions, allowedSubdomains))
 								{
-									var absoluteCanonical = new Uri(new Uri(url), canonicalHref).ToString();
-									urlsToDownload.Add(absoluteCanonical);
+									urlsToDownload.Add(canonicalAdmission.AbsoluteUrl!);
 								}
 							}
 						}
 
 						// [KEEP] Extended URL extraction — discovers URLs in non-standard
-						// locations missed by <a href> crawling. See UrlExtractor.cs for
+						// locations missed by <a href> crawling. See Urls/Extractor.cs for
 						// full rationale. Results feed into assetsToDownload for full download
 						// and 404 checking. CSS files are scanned one level for url() refs.
 						// JS files are downloaded but NOT scanned (minified, no signal).
-						var extended = UrlExtractor.ExtractFromHtml(content, url, jsonPathPrefixes);
+						var extended = Extractor.FromHtml(content, url, jsonPathPrefixes);
 						foreach (var extracted in extended)
 						{
 							// [KEEP] Security boundary — extended URLs extracted from JSON/scripts are
 							// scope-checked to prevent following arbitrary URLs embedded in page content.
-							if (!Tools.IsValidLink(extracted.Url, websiteUrl, downloadExclusions, allowedSubdomains))
+							var extAdmission = CrawlGate.TryAdmit(extracted.Url, pageBase, policy);
+							if (!extAdmission.Admitted
+								|| !Validity.IsInDownloadScope(extAdmission.AbsoluteUrl!, scopeBase, downloadExclusions, allowedSubdomains))
 							{
 								continue;
 							}
 							// Strip fragment.
-							var extUrl = extracted.Url;
+							var extUrl = extAdmission.AbsoluteUrl!;
 							var hashIdx = extUrl.IndexOf('#');
 							if (hashIdx >= 0)
 							{
@@ -337,11 +391,11 @@ namespace Crawler
 			}
 			catch (HttpRequestException httpEx)
 			{
-				Tools.Log(url, httpEx.StatusCode?.ToString() ?? "HttpRequestException", httpEx.Message, log);
+				CrawlLogWriter.Write(url, httpEx.StatusCode?.ToString() ?? "HttpRequestException", httpEx.Message, log);
 			}
 			catch (Exception ex)
 			{
-				Tools.Log(url, "N/A", ex.Message, log);
+				CrawlLogWriter.Write(url, "N/A", ex.Message, log);
 			}
 			finally
 			{
@@ -354,7 +408,7 @@ namespace Crawler
 			// bind first (triage partitioning across operators; splitting the crawl by
 			// exclusion or per language tree), so a bounded queue/channel refactor here
 			// is a theoretical improvement, not a pressing one.
-			var downloadTasks = urlsToDownload.Select(u => DownloadWebsiteAsync(u, saveDirectory, log, websiteUrl, downloadExclusions, modalQueryParameters, source, jsonPathPrefixes)).ToList();
+			var downloadTasks = urlsToDownload.Select(u => DownloadWebsiteAsync(u, saveDirectory, log, websiteUrl, downloadExclusions, modalQueryParameters, source, jsonPathPrefixes, allowedSubdomains)).ToList();
 			await Task.WhenAll(downloadTasks);
 
 			var assetTasks = assetsToDownload.Select(async a =>
@@ -371,6 +425,65 @@ namespace Crawler
 			}).ToList();
 
 			await Task.WhenAll(assetTasks);
+		}
+
+		// [KEEP] Security boundary — reporting for a refused (out-of-root) write.
+		// The PathContainmentCheck primitive stays pure; the side effects live here
+		// at the call layer. Containment is enforced unconditionally at the write
+		// itself, so the offending bytes are never written regardless of what this
+		// does — every escape attempt is refused independently, no matter how many
+		// times a hostile origin tries. This therefore does not halt the crawl:
+		// each refusal is logged to file and collected, the crawl continues at full
+		// parallelism, and all refusals are presented in one end-of-crawl summary
+		// for inspection (or, in a silent run, left in the log).
+		internal static void ReportContainmentRefusal(
+			PathContainmentCheck.Verdict verdict, string sourceUrl, string captureRoot, string log)
+		{
+			// File-only forensic record (timestamped, never red-walls the console);
+			// the end-of-crawl summary renders the inspectable block.
+			Logger.LogDetailToFile(
+				$"Path containment: blocked an out-of-root write for '{sourceUrl}' — the download " +
+				$"name resolved outside the capture root '{captureRoot}' (reason: {verdict.Reason}). " +
+				"No bytes were written.");
+
+			lock (containmentRefusalLock)
+			{
+				containmentRefusals.Add((sourceUrl, verdict.Reason));
+			}
+		}
+
+		// Presents the collected out-of-root refusals once, after all download
+		// phases complete. Interactive runs get a calm console block for inspection;
+		// silent runs already carry the per-refusal lines in the log.
+		internal static void WriteContainmentRefusalSummary()
+		{
+			List<(string Url, string Reason)> refusals;
+			lock (containmentRefusalLock)
+			{
+				if (containmentRefusals.Count == 0)
+				{
+					return;
+				}
+
+				refusals = [.. containmentRefusals];
+			}
+
+			if (CrawlerContext.Silent)
+			{
+				return;
+			}
+
+			ConsoleUi.WriteBlank();
+			ConsoleUi.WriteActionRequired(
+				$"Path containment: {refusals.Count} download(s) were blocked from writing outside the capture folder.");
+			ConsoleUi.WriteActionRequired(
+				"These files were NOT downloaded. Review for a benign config slip vs. the site serving hostile content:");
+			foreach (var (url, reason) in refusals)
+			{
+				ConsoleUi.WriteActionRequired($"  {url}  (reason: {reason})");
+			}
+
+			ConsoleUi.WriteBlank();
 		}
 
 		// Write the per-download header sidecar ("<hash>.header") next to the

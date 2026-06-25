@@ -274,16 +274,17 @@ namespace Crawler.Tests
 				"<dc:title><rdf:Alt><rdf:li>Title|With|Pipes</rdf:li></rdf:Alt></dc:title>");
 			var result = PdfQualityAnalyzer.CheckPdfBytes(
 				Encoding.Latin1.GetBytes($"%PDF-1.4\n{xmp}\n%%EOF"), PageUrl);
-			// Pipe characters in values are preserved — @@@ is the field delimiter.
+			// Pipe characters in values are preserved — RFC-4180 quoting in
+			// WriteCsvPair protects any delimiter inside a field.
 			Assert.Contains("|", result.Title);
 		}
 
 		[Fact]
-		public void CheckPdfBytes_Serialize_ReturnsExactlyThirteenColumns()
+		public void CheckPdfBytes_ToFields_ReturnsExactlyThirteenColumns()
 		{
-			// Even with tricky content, serialized row must have exactly 13 columns
+			// Even with tricky content, the field row must have exactly 13 columns
 			var result = PdfQualityAnalyzer.CheckPdfBytes(PdfWith(string.Empty), PageUrl);
-			var parts = result.Serialize().Split("@@@");
+			var parts = result.ToFields();
 			Assert.Equal(13, parts.Length);
 		}
 
@@ -424,17 +425,21 @@ namespace Crawler.Tests
 					StructTree: -1, RoleMap: -1, Outlines: -1, AltText: -1, FormFields: -1,
 					PdfUA: -1)
 			};
-			var path = Path.Combine(Path.GetTempPath(), $"remediation_{Guid.NewGuid():N}.log");
+			var csvBase = Path.Combine(Path.GetTempPath(), $"remediation_{Guid.NewGuid():N}");
 			try
 			{
-				PdfQualityAnalyzer.WriteRemediationLogPublic(results, path);
-				var lines = File.ReadAllLines(path)
+				PdfQualityAnalyzer.WriteRemediationLogPublic(results, csvBase);
+				var lines = File.ReadAllLines(csvBase + IssueLogWriter.CsvSemicolonSuffix)
 					.Where(l => l.Length > 0 && !l.StartsWith("PageUrl"))
 					.ToList();
 				Assert.NotEmpty(lines);
 				Assert.Contains("PDF_NO_PDFUA", lines.Last());
 			}
-			finally { File.Delete(path); }
+			finally
+			{
+				File.Delete(csvBase + IssueLogWriter.CsvSemicolonSuffix);
+				File.Delete(csvBase + IssueLogWriter.CsvCommaSuffix);
+			}
 		}
 
 		[Fact]
@@ -447,16 +452,20 @@ namespace Crawler.Tests
 					StructTree: 1, RoleMap: 1, Outlines: 1, AltText: 1, FormFields: -1,
 					PdfUA: 1)
 			};
-			var path = Path.Combine(Path.GetTempPath(), $"remediation_{Guid.NewGuid():N}.log");
+			var csvBase = Path.Combine(Path.GetTempPath(), $"remediation_{Guid.NewGuid():N}");
 			try
 			{
-				PdfQualityAnalyzer.WriteRemediationLogPublic(results, path);
-				var lines = File.ReadAllLines(path)
+				PdfQualityAnalyzer.WriteRemediationLogPublic(results, csvBase);
+				var lines = File.ReadAllLines(csvBase + IssueLogWriter.CsvSemicolonSuffix)
 					.Where(l => l.Length > 0 && !l.StartsWith("PageUrl"))
 					.ToList();
 				Assert.Empty(lines);
 			}
-			finally { File.Delete(path); }
+			finally
+			{
+				File.Delete(csvBase + IssueLogWriter.CsvSemicolonSuffix);
+				File.Delete(csvBase + IssueLogWriter.CsvCommaSuffix);
+			}
 		}
 
 		[Fact]
@@ -470,18 +479,53 @@ namespace Crawler.Tests
 					StructTree: 1, RoleMap: 1, Outlines: 1, AltText: 1, FormFields: -1,
 					PdfUA: 1)
 			};
-			var path = Path.Combine(Path.GetTempPath(), $"remediation_{Guid.NewGuid():N}.log");
+			var csvBase = Path.Combine(Path.GetTempPath(), $"remediation_{Guid.NewGuid():N}");
 			try
 			{
-				PdfQualityAnalyzer.WriteRemediationLogPublic(results, path);
-				var lines = File.ReadAllLines(path)
+				PdfQualityAnalyzer.WriteRemediationLogPublic(results, csvBase);
+				var lines = File.ReadAllLines(csvBase + IssueLogWriter.CsvSemicolonSuffix)
 					.Where(l => l.Length > 0 && !l.StartsWith("PageUrl"))
 					.ToList();
 				Assert.Equal(2, lines.Count);
 				Assert.Contains("PDF_NO_LANGUAGE", lines[0]);
 				Assert.Contains("PDF_NO_TAGS", lines[1]);
 			}
-			finally { File.Delete(path); }
+			finally
+			{
+				File.Delete(csvBase + IssueLogWriter.CsvSemicolonSuffix);
+				File.Delete(csvBase + IssueLogWriter.CsvCommaSuffix);
+			}
+		}
+
+		[Fact]
+		public void Analyse_WritesQualityCsvPair_WithThirteenColumnHeader()
+		{
+			// Empty (but existing) download dir → no PDFs → the quality CSV pair is
+			// still written header-only; exercises the WriteCsvPair path end to end.
+			var dir = Path.Combine(Path.GetTempPath(), $"pdfq_{Guid.NewGuid():N}");
+			Directory.CreateDirectory(dir);
+			Logger.Initialize(Path.Combine(dir, "test.log"), silent: true);
+			var qualityBase = Path.Combine(Path.GetTempPath(), $"17-q_{Guid.NewGuid():N}");
+			var remediationBase = Path.Combine(Path.GetTempPath(), $"18-r_{Guid.NewGuid():N}");
+			try
+			{
+				PdfQualityAnalyzer.Analyse(dir, qualityBase, remediationBase);
+
+				var semicolon = qualityBase + IssueLogWriter.CsvSemicolonSuffix;
+				Assert.True(File.Exists(semicolon), "quality semicolon CSV not written");
+				Assert.True(File.Exists(qualityBase + IssueLogWriter.CsvCommaSuffix), "quality comma CSV not written");
+
+				var header = IssueLogWriter.ParseCsvLine(File.ReadAllLines(semicolon)[0], ';');
+				Assert.Equal(13, header.Length);
+				Assert.Equal("PageUrl", header[0]);
+				Assert.Equal("PdfUA", header[12]);
+			}
+			finally
+			{
+				Directory.Delete(dir, recursive: true);
+				File.Delete(qualityBase + IssueLogWriter.CsvSemicolonSuffix);
+				File.Delete(qualityBase + IssueLogWriter.CsvCommaSuffix);
+			}
 		}
 
 	}

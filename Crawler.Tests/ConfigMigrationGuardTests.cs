@@ -1,5 +1,6 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
@@ -10,7 +11,7 @@ namespace Crawler.Tests
 	///     (sibling of the already-tested LookUpUrlForFile).
 	///
 	/// SYNTHETIC fixtures. In the Logger collection: LoadFromJson / CrawlIndex log
-	/// via the static Logger; UrlCache is process-wide so lookup fixtures use
+	/// via the static Logger; Cache is process-wide so lookup fixtures use
 	/// distinct filenames.
 	/// </summary>
 	[Collection("Logger")]
@@ -77,7 +78,7 @@ namespace Crawler.Tests
 			var lookup = Path.Combine(_dir, $"lookup-{Guid.NewGuid():N}.txt");
 			File.WriteAllLines(lookup,
 				new[] { $"{filename}|https://example.com/page|sitemap" }, Encoding.UTF8);
-			UrlCache.LoadCache(lookup);
+			Cache.Load(lookup);
 
 			Assert.Equal("sitemap", CrawlIndex.LookUpSourceForFile(filename));
 		}

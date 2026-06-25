@@ -8,43 +8,45 @@ namespace Crawler
 	// Checks all PDF files in the download directory for metadata quality.
 	// Uses pure .NET — no third-party PDF library required.
 	//
-	// Output: 17-pdf-quality.log — one row per PDF:
-	//   PageUrl@@@Title@@@Description@@@Keywords@@@Language@@@Tags@@@PdfA
-	//   @@@StructTree@@@RoleMap@@@Outlines@@@AltText@@@FormFields@@@PdfUA
+	// Output: 17-pdf-quality_{semicolon,comma}.csv — one row per PDF, columns:
+	//   PageUrl, Title, Description, Keywords, Language, Tags, PdfA,
+	//   StructTree, RoleMap, Outlines, AltText, FormFields, PdfUA
 	//
 	//   Text fields : actual value or "n/a" if missing.
 	//   Flag fields : 1 = present, -1 = absent. 0 reserved for unknown/unparseable.
 	//   PdfUA is always the last column.
 	//
-	// Output: 18-pdf-remediation.log — one row per gap per PDF, priority-ordered:
-	//   PageUrl@@@Priority@@@Effort@@@Gap@@@Action
-	//   Priority 1 = fix first (low effort), 11 = fix last (PDF/UA composite target).
+	// Output: 18-pdf-remediation_{semicolon,comma}.csv — one row per gap per PDF,
+	//   priority-ordered, columns: PageUrl, Priority, Effort, Gap, Action.
+	//   Priority 1 = fix first (low effort), 12 = fix last (PDF/UA composite target).
 	//   Multiple rows per PDF — filter by Priority or Effort in Excel.
 	//
 	// IssueTracking: one row per PDF with at least one gap.
 	//   Word    = comma-separated gap types (PDF_NO_TITLE, PDF_NO_LANGUAGE, etc.)
 	//   Excerpt = document title (makes the ticket identifiable)
 	//
-	// Delimiter: @@@ — three @ signs used instead of pipe because PDF metadata
-	// values may contain pipe characters. The @@@ sequence is vanishingly rare in
-	// real PDF metadata. Pipe (|) is used by all other logs in this system.
+	// Format: dual-locale CSV (semicolon + comma variants), BOM, RFC-4180 quoted
+	// via IssueLogWriter.WriteCsvPair — so PDF metadata values containing a
+	// delimiter or quote are preserved verbatim rather than corrupting the row.
+	// (Replaces the former @@@-delimited single log; @@@ was a pre-CSV workaround
+	// for pipe characters in metadata, now handled by quoting.)
 	// ─────────────────────────────────────────────────────────────────────────
 
 	public static class PdfQualityAnalyzer
 	{
-		private const string Header =
-			"PageUrl@@@Title@@@Description@@@Keywords@@@Language@@@Tags@@@PdfA" +
-			"@@@StructTree@@@RoleMap@@@Outlines@@@AltText@@@FormFields@@@PdfUA";
+		private static readonly string?[] HeaderFields =
+			["PageUrl", "Title", "Description", "Keywords", "Language", "Tags", "PdfA",
+			 "StructTree", "RoleMap", "Outlines", "AltText", "FormFields", "PdfUA"];
 
-		private const string RemediationHeader =
-			"PageUrl@@@Priority@@@Effort@@@Gap@@@Action";
+		private static readonly string?[] RemediationHeaderFields =
+			["PageUrl", "Priority", "Effort", "Gap", "Action"];
 
 		// ── Public entry point ────────────────────────────────────────────────
 
 		public static List<IssueTracking.IssueRecord> Analyse(
 			string downloadDirectory,
-			string pdfQualityLogPath,
-			string pdfRemediationLogPath)
+			string pdfQualityCsvBasePath,
+			string pdfRemediationCsvBasePath)
 		{
 			var results = new List<PdfResult>();
 
@@ -60,7 +62,7 @@ namespace Crawler
 			if (pdfFiles.Length == 0)
 			{
 				Logger.LogInfo("PdfQualityAnalyzer: no PDF files found.");
-				WriteLog(pdfQualityLogPath, results);
+				WriteLog(pdfQualityCsvBasePath, results);
 				return [];
 			}
 
@@ -85,12 +87,13 @@ namespace Crawler
 				}
 			}
 
-			WriteLog(pdfQualityLogPath, results);
-			WriteRemediationLog(pdfRemediationLogPath, results);
+			WriteLog(pdfQualityCsvBasePath, results);
+			WriteRemediationLog(pdfRemediationCsvBasePath, results);
 
 			var issueCount = results.Count(r => r.HasGaps);
 			Logger.LogInfo($"PdfQualityAnalyzer: {results.Count} PDF(s) checked, " +
-				$"{issueCount} with quality gap(s). See {Path.GetFileName(pdfQualityLogPath)}.");
+				$"{issueCount} with quality gap(s). See {Path.GetFileName(pdfQualityCsvBasePath)}" +
+				$"{IssueLogWriter.CsvSemicolonSuffix} / {Path.GetFileName(pdfQualityCsvBasePath)}{IssueLogWriter.CsvCommaSuffix}.");
 
 			return results
 				.Where(r => r.HasGaps)
@@ -198,9 +201,15 @@ namespace Crawler
 				}
 			}
 
-			public string Serialize() =>
-				$"{PageUrl}@@@{Title}@@@{Description}@@@{Keywords}@@@{Language}@@@{Tags}@@@{PdfA}" +
-				$"@@@{StructTree}@@@{RoleMap}@@@{Outlines}@@@{AltText}@@@{FormFields}@@@{PdfUA}";
+			// Field order mirrors HeaderFields. Ints render via invariant interpolation
+			// exactly as the former @@@ Serialize did; RFC-4180 quoting in WriteCsvPair
+			// protects any delimiter/quote in the string fields (PDF metadata).
+			public string?[] ToFields() =>
+				new string?[]
+				{
+					PageUrl, Title, Description, Keywords, Language, $"{Tags}", $"{PdfA}",
+					$"{StructTree}", $"{RoleMap}", $"{Outlines}", $"{AltText}", $"{FormFields}", $"{PdfUA}"
+				};
 		}
 
 		// ── PDF checker ───────────────────────────────────────────────────────
@@ -362,8 +371,8 @@ namespace Crawler
 			var stripped = System.Text.RegularExpressions.Regex.Replace(raw, @"<[^>]+>", " ");
 			// Normalize whitespace (collapse newlines and multiple spaces).
 			stripped = System.Text.RegularExpressions.Regex.Replace(stripped, @"\s+", " ").Trim();
-			// Field delimiter is @@@ (consistent with 08-seo-data.log), so pipe
-			// characters in values are preserved as-is.
+			// Values are RFC-4180-quoted at write time (WriteCsvPair), so a pipe,
+			// semicolon, or comma in a value is preserved as-is.
 			return stripped.Trim();
 		}
 
@@ -597,25 +606,26 @@ namespace Crawler
 
 		// ── Log writer ────────────────────────────────────────────────────────
 
-		private static void WriteLog(string logPath, List<PdfResult> results)
+		private static void WriteLog(string csvBasePath, List<PdfResult> results)
 		{
-			var lines = new List<string> { Header };
-			lines.AddRange(results.OrderBy(r => r.PageUrl).Select(r => r.Serialize()));
-			FileIo.WriteAllLinesWithRetry(logPath, lines, Path.GetFileName(logPath));
+			var records = new List<string?[]> { HeaderFields };
+			records.AddRange(results.OrderBy(r => r.PageUrl).Select(r => r.ToFields()));
+			IssueLogWriter.WriteCsvPair(csvBasePath, records);
 		}
 
 		// ── Remediation log writer ────────────────────────────────────────────
 
 		/// <summary>
-		/// Writes 18-pdf-remediation.log — one row per gap per PDF, priority-ordered
+		/// Writes 18-pdf-remediation_{semicolon,comma}.csv — one row per gap per PDF,
+		/// priority-ordered
 		/// from simplest fix (metadata fields) to hardest (full PDF/UA compliance).
 		/// PDF_NO_PDFUA is always the last row so the compliance target is always
 		/// visible and filterable even when all other gaps are resolved.
 		/// </summary>
-		internal static void WriteRemediationLogPublic(List<PdfResult> results, string logPath) =>
-			WriteRemediationLog(logPath, results);
+		internal static void WriteRemediationLogPublic(List<PdfResult> results, string csvBasePath) =>
+			WriteRemediationLog(csvBasePath, results);
 
-		private static void WriteRemediationLog(string logPath, List<PdfResult> results)
+		private static void WriteRemediationLog(string csvBasePath, List<PdfResult> results)
 		{
 			// Priority | Effort | Gap code | Action
 			var ladder = new (int Priority, string Effort, string Gap, string Action)[]
@@ -634,7 +644,7 @@ namespace Crawler
 				(12, "high",   "PDF_NO_PDFUA",            "Full PDF/UA remediation — resolve all gaps above first"),
 			};
 
-			var lines = new List<string> { RemediationHeader };
+			var records = new List<string?[]> { RemediationHeaderFields };
 			foreach (var result in results.OrderBy(r => r.PageUrl))
 			{
 				var gaps = result.GapSummary
@@ -655,10 +665,10 @@ namespace Crawler
 						continue;
 					}
 
-					lines.Add($"{result.PageUrl}@@@{priority}@@@{effort}@@@{gap}@@@{action}");
+					records.Add(new string?[] { result.PageUrl, $"{priority}", effort, gap, action });
 				}
 			}
-			FileIo.WriteAllLinesWithRetry(logPath, lines, Path.GetFileName(logPath));
+			IssueLogWriter.WriteCsvPair(csvBasePath, records);
 		}
 	}
 }

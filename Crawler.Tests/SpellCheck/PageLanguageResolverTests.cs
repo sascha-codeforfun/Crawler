@@ -1,6 +1,7 @@
 namespace Crawler.Tests.SpellCheck
 {
 	using System;
+	using Crawler.Lexicon;
 	using System.Collections.Generic;
 	using System.Linq;
 	using Crawler.SpellCheck;
@@ -82,11 +83,11 @@ namespace Crawler.Tests.SpellCheck
 		[Fact]
 		public void ValidateBundles_AllPresent_DoesNotThrow()
 		{
-			var bundles = new Dictionary<string, DictionaryBundle>
+			var bundles = new Dictionary<string, Bundle>
 			{
-				["de"] = new DictionaryBundle(),
-				["en"] = new DictionaryBundle(),
-				["fr"] = new DictionaryBundle(),
+				["de"] = new Bundle(),
+				["en"] = new Bundle(),
+				["fr"] = new Bundle(),
 			};
 			PageLanguageResolver.ValidateBundles(Overrides(), bundles); // no throw
 		}
@@ -94,10 +95,10 @@ namespace Crawler.Tests.SpellCheck
 		[Fact]
 		public void ValidateBundles_MissingBundle_Throws_NamingLanguageAndKey()
 		{
-			var bundles = new Dictionary<string, DictionaryBundle>
+			var bundles = new Dictionary<string, Bundle>
 			{
-				["de"] = new DictionaryBundle(),
-				["en"] = new DictionaryBundle(),
+				["de"] = new Bundle(),
+				["en"] = new Bundle(),
 				// fr deliberately absent
 			};
 			var ex = Assert.Throws<InvalidOperationException>(
@@ -110,7 +111,7 @@ namespace Crawler.Tests.SpellCheck
 		[Fact]
 		public void ValidateBundles_NoOverrides_DoesNotThrow()
 		{
-			var bundles = new Dictionary<string, DictionaryBundle>();
+			var bundles = new Dictionary<string, Bundle>();
 			PageLanguageResolver.ValidateBundles(null, bundles);
 			PageLanguageResolver.ValidateBundles(new Dictionary<string, List<string>>(), bundles);
 		}

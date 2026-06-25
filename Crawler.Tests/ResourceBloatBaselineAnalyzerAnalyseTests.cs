@@ -10,7 +10,7 @@ namespace Crawler.Tests
 	/// per-page delta rows for pages above the detected baseline.
 	///
 	/// Most tests write crafted log-20 rows directly (the 12-column format is
-	/// fixed) — no UrlCache needed. The download directory only feeds
+	/// fixed) — no Cache needed. The download directory only feeds
 	/// BuildUrlFrequency, which determines the baseline file list, so HTML
 	/// fixtures appear only in the frequency tests. All fixtures are SYNTHETIC.
 	///

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using Crawler.Html;
 
 namespace Crawler
 {
@@ -75,7 +76,7 @@ namespace Crawler
 			Parallel.ForEach(htmlFiles, parallelOptions, file =>
 			{
 				// 1. Read only the head (or up to the cap if </head> is absent/late).
-				var headBytes = Tools.ReadHeadBytes(file, HeadReadCapBytes, out bool reachedCap);
+				var headBytes = MarkupFile.ReadHeadBytes(file, HeadReadCapBytes, out bool reachedCap);
 				if (reachedCap)
 				{
 					Interlocked.Increment(ref truncatedHeads);

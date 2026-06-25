@@ -1,5 +1,6 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
@@ -7,13 +8,13 @@ namespace Crawler.Tests
 	/// End-to-end tests for ResourceBloatAnalyzer.Analyse and the private helpers
 	/// it drives (BuildJsCssIndex, LoadBase64Log, AnalysePage). Each test lays out
 	/// a temp download directory with HTML pages and JS/CSS files, optionally a
-	/// log-19 base64 file, populates UrlCache so filenames resolve to URLs, runs
+	/// log-19 base64 file, populates Cache so filenames resolve to URLs, runs
 	/// Analyse, then asserts on the written report (log 20).
 	///
 	/// Thresholds are passed in small so tiny fixtures trip the OVERSIZED /
 	/// BASE64_LARGE gates deterministically. All fixtures are SYNTHETIC.
 	///
-	/// UrlCache is process-wide static with no reset, so every test uses
+	/// Cache is process-wide static with no reset, so every test uses
 	/// GUID-unique filenames; lookups are keyed by filename and stay isolated.
 	/// In the Logger collection: Analyse logs progress via the static Logger.
 	/// </summary>
@@ -65,7 +66,7 @@ namespace Crawler.Tests
 		{
 			var path = Path.Combine(_dir, $"lookup_{Guid.NewGuid():N}.lku");
 			File.WriteAllLines(path, _lookups, Encoding.UTF8);
-			UrlCache.LoadCache(path);
+			Cache.Load(path);
 		}
 
 		// Log 19: header line (skipped by the loader) plus the given data rows.

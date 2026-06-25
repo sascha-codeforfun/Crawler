@@ -38,9 +38,10 @@ namespace Crawler
 			TicketGenerationConfig ticketConfig,
 			CmsContentListConfig? cmsContentList,
 			Func<string, SpellMetadataLookup.TicketMetadata> metadataLookup,
-			string? errorSourcesLogPath = null,
+			string? errorSourcesCsvBasePath = null,
 			List<string>? allowedSubdomains = null,
-			List<IssueTracking.IssueRecord>? qualityRows = null)
+			List<IssueTracking.IssueRecord>? qualityRows = null,
+			IReadOnlyDictionary<string, List<string>>? collisionContextsByKey = null)
 		{
 			if (!ticketConfig.IsConfigured)
 			{
@@ -58,10 +59,10 @@ namespace Crawler
 			// actionable findings produce tickets.
 			var findings = new List<TicketFinding>();
 			findings.AddRange(BuildSpellingFindings(spellingRows, ticketConfig));
-			findings.AddRange(BuildQualityFindings(qualityRows ?? [], ticketConfig));
-			if (!string.IsNullOrEmpty(errorSourcesLogPath))
+			findings.AddRange(BuildQualityFindings(qualityRows ?? [], ticketConfig, collisionContextsByKey));
+			if (!string.IsNullOrEmpty(errorSourcesCsvBasePath))
 			{
-				findings.AddRange(BuildBrokenLinkFindings(errorSourcesLogPath));
+				findings.AddRange(BuildBrokenLinkFindings(errorSourcesCsvBasePath));
 			}
 
 			// Severity order is driven solely by TicketIssueTypes. An
@@ -147,6 +148,9 @@ namespace Crawler
 		/// Neutral, type-agnostic ticket finding. Url is the OWNING page
 		/// (the editor's page that gets the fix). PrimaryText is the word (spelling)
 		/// or the dead target path (404). Context/Comment/Annotation are optional.
+		/// D048: Contexts carries every occurrence on the page for findings that
+		/// collapse per page+type (WORD_COLLISION) — when set, the bullet renders one
+		/// "Context:" line per entry; when null, the single Context renders as before.
 		/// </summary>
 		internal sealed record TicketFinding(
 			string Type,
@@ -156,7 +160,8 @@ namespace Crawler
 			string Context = "",
 			string SourceLabel = "",
 			string Comment = "",
-			string Language = "");
+			string Language = "",
+			IReadOnlyList<string>? Contexts = null);
 
 		/// <summary>
 		/// Maps IssueTracking SPELLING rows to findings. Only 'pending' rows (operator
@@ -202,7 +207,8 @@ namespace Crawler
 		/// under the '+' rule, exactly as a spelling triage comment does.
 		/// </summary>
 		private static IEnumerable<TicketFinding> BuildQualityFindings(
-			List<IssueTracking.IssueRecord> qualityRows, TicketGenerationConfig ticketConfig)
+			List<IssueTracking.IssueRecord> qualityRows, TicketGenerationConfig ticketConfig,
+			IReadOnlyDictionary<string, List<string>>? collisionContextsByKey = null)
 		{
 			var today = DateTime.UtcNow.Date;
 			foreach (var r in qualityRows)
@@ -216,6 +222,17 @@ namespace Crawler
 					DateTime.TryParse(r.DateFound, CultureInfo.InvariantCulture, DateTimeStyles.None, out var found)
 					&& found.Date.AddDays(ticketConfig.OverdueAfterDays) <= today;
 
+				// D048: a WORD_COLLISION row's Key joins to this run's full occurrence
+				// list, so the ticket names every collision on the page. Non-collision
+				// rows are absent from the map → Contexts stays null → single Context as
+				// before. The map IS the WORD_COLLISION filter (only collision keys
+				// populate it), so no per-type branch is needed here.
+				var contexts = collisionContextsByKey != null
+					&& collisionContextsByKey.TryGetValue(r.Key, out var ctxs)
+					&& ctxs.Count > 0
+						? ctxs
+						: null;
+
 				yield return new TicketFinding(
 					Type: QualityType,
 					Url: r.Url,
@@ -224,33 +241,42 @@ namespace Crawler
 					Context: r.Excerpt,
 					SourceLabel: r.SourceLabel,
 					Comment: r.Comment,
-					Language: r.Language);
+					Language: r.Language,
+					Contexts: contexts);
 			}
 		}
 
 		/// <summary>
-		/// Parses 07-404-sources.log ({deadTarget}|{sourcePage}) into findings
-		/// keyed on the SOURCE page (column 2) — the page whose editor owns the
-		/// broken link. PrimaryText is the dead target (column 1). Every row is
-		/// actionable (a 404 has no triage history yet), so Status = new.
+		/// Parses the 07-404-sources dual-locale CSV pair (_semicolon.csv, columns
+		/// 404Url, SourceUrl) into findings keyed on the SOURCE page (column 2) — the
+		/// page whose editor owns the broken link. PrimaryText is the dead target
+		/// (column 1). Every row is actionable (a 404 has no triage history yet), so
+		/// Status = new.
 		/// </summary>
-		private static IEnumerable<TicketFinding> BuildBrokenLinkFindings(string logPath)
+		private static IEnumerable<TicketFinding> BuildBrokenLinkFindings(string csvBasePath)
 		{
-			if (!File.Exists(logPath))
+			var semicolonPath = csvBasePath + IssueLogWriter.CsvSemicolonSuffix;
+			if (!File.Exists(semicolonPath))
 			{
 				yield break;
 			}
 
-			foreach (var line in File.ReadAllLines(logPath, Encoding.UTF8))
+			foreach (var line in File.ReadAllLines(semicolonPath, Encoding.UTF8))
 			{
 				if (line.Length == 0)
 				{
 					continue;
 				}
 
-				var idx = line.IndexOf('|');
-				var deadTarget = idx >= 0 ? line[..idx].Trim() : line.Trim();
-				var sourcePage = idx >= 0 ? line[(idx + 1)..].Trim() : string.Empty;
+				var p = IssueLogWriter.ParseCsvLine(line, ';');
+				if (p.Length == 0
+					|| string.Equals(p[0], "404Url", StringComparison.OrdinalIgnoreCase))
+				{
+					continue; // header row
+				}
+
+				var deadTarget = p.Length > 0 ? p[0].Trim() : string.Empty;
+				var sourcePage = p.Length > 1 ? p[1].Trim() : string.Empty;
 				if (string.IsNullOrEmpty(sourcePage) || string.IsNullOrEmpty(deadTarget))
 				{
 					continue;
@@ -562,10 +588,26 @@ namespace Crawler
 						? $"* {primary}{source}"
 						: $"* {primary}{source} — {annotation}";
 
-					var (cleanedExcerpt, _) = IssueLogWriter.SanitizeField(e.Context, '\uFFFF');
-					var contextLine = string.IsNullOrEmpty(cleanedExcerpt)
-						? "  Context: (none)"
-						: $"  Context: {cleanedExcerpt}";
+					// D048: a WORD_COLLISION finding carries every occurrence on the page
+					// in Contexts (one "Context:" line each) so the per-page ticket names
+					// all defects, not just the first. Other findings keep the single
+					// Context (Contexts == null → unchanged behaviour).
+					string contextLine;
+					if (e.Contexts is { Count: > 0 })
+					{
+						contextLine = string.Join(Environment.NewLine, e.Contexts.Select(c =>
+						{
+							var (cc, _) = IssueLogWriter.SanitizeField(c, '\uFFFF');
+							return string.IsNullOrEmpty(cc) ? "  Context: (none)" : $"  Context: {cc}";
+						}));
+					}
+					else
+					{
+						var (cleanedExcerpt, _) = IssueLogWriter.SanitizeField(e.Context, '\uFFFF');
+						contextLine = string.IsNullOrEmpty(cleanedExcerpt)
+							? "  Context: (none)"
+							: $"  Context: {cleanedExcerpt}";
+					}
 
 					var block = headLine + Environment.NewLine + contextLine;
 

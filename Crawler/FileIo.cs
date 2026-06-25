@@ -193,15 +193,19 @@ namespace Crawler
 		/// during an [L] replay — the same locked-file scenario the write gate
 		/// guards against, but at the delete step that runs *before* any write.
 		///
-		/// Skip/give-up is benign here: every cleared log is unconditionally
-		/// rewritten later in the same run, so a surviving stale file is overwritten
-		/// regardless. The retry therefore favours continuing over aborting — silent
-		/// give-up and operator-skip both log and return false, and callers continue.
+		/// Also used by the snapshot clean-sweep, where a file left open in Excel
+		/// should be retried/skipped rather than counted as a hard error.
+		///
+		/// The retry favours continuing over aborting — silent give-up and
+		/// operator-skip both log and return false, and callers continue. A skip is
+		/// benign for both callers: ClearLogs rewrites the file later in the same run,
+		/// and the clean-sweep simply leaves the still-open file in place (it is
+		/// re-derivable and removed on a later sweep).
 		///
 		/// A missing file is a no-op success (true) — nothing to delete.
 		/// </summary>
 		/// <returns>True if deleted or already absent; false on skip / silent give-up.</returns>
-		private static bool DeleteWithRetry(string path, string displayName)
+		internal static bool DeleteWithRetry(string path, string displayName)
 		{
 			if (!File.Exists(path))
 			{
@@ -317,7 +321,10 @@ namespace Crawler
 
 		public static void WriteList(string filePath, List<string> lines)
 		{
-			using StreamWriter writer = new(filePath);
+			// Explicit Encoding.UTF8 emits the UTF-8 BOM (the default `new StreamWriter(path)` uses
+			// BOM-less UTF-8), matching the sibling WriteAllLinesWithRetry so every log this layer
+			// writes starts with the BOM that downstream consumers (Excel/PowerQuery) rely on.
+			using StreamWriter writer = new(filePath, append: false, Encoding.UTF8);
 			foreach (var line in lines)
 			{
 				writer.WriteLine(line);

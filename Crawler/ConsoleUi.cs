@@ -658,14 +658,26 @@ namespace Crawler
 		/// spelling, dictionary): "[n/m]  Label : value" with the counter dimmed.
 		/// Pair with a preceding WriteDivider() so every card opens the same way.
 		/// </summary>
-		internal static void WriteCardHeader(int index, int total, string label, string value, string? tag = null)
+		internal static void WriteCardHeader(int index, int total, string label, string value, string? tag = null, ConsoleColor? valueColor = null)
 		{
 			Console.ForegroundColor = ConsoleColor.DarkGray;
 			Console.Write($"[{index}/{total}]  ");
 			Console.ForegroundColor = ConsoleColor.White;
 			Console.Write($"{label} : ");
 			Console.ResetColor();
-			Console.Write(value);
+			if (valueColor.HasValue)
+			{
+				// A tinted value flags a special-cased finding (e.g. the lorem-ipsum placeholder, amber)
+				// without altering the column layout. Default (null) leaves the value plain as before.
+				Console.ForegroundColor = valueColor.Value;
+				Console.Write(value);
+				Console.ResetColor();
+			}
+			else
+			{
+				Console.Write(value);
+			}
+
 			if (!string.IsNullOrEmpty(tag))
 			{
 				Console.ForegroundColor = ConsoleColor.DarkYellow;
@@ -1145,6 +1157,23 @@ namespace Crawler
 			Console.Write(prefix);
 			Console.BackgroundColor = ConsoleColor.DarkYellow;
 			Console.ForegroundColor = ConsoleColor.Black;
+			Console.Write(highlight);
+			Console.ResetColor();
+			WriteSuffixAndFinishLine(suffix);
+		}
+
+		/// <summary>
+		/// WCAG-scheme variant of <see cref="WriteLineWithHighlight"/> — white-on-DarkBlue instead of
+		/// white-on-red. For a span that is flagged but is NOT a typo (the lorem-ipsum placeholder
+		/// block), so it reads as "this is filler" rather than the red typo alarm. Writes plain prefix,
+		/// WCAG highlight, plain suffix, newline. (Member order is irrelevant in C#; the colour consts
+		/// are defined with the other highlight schemes below.)
+		/// </summary>
+		internal static void WriteLineWithWcagHighlight(string prefix, string highlight, string suffix)
+		{
+			Console.Write(prefix);
+			Console.BackgroundColor = HighlightBgWcag;
+			Console.ForegroundColor = HighlightFgWcag;
 			Console.Write(highlight);
 			Console.ResetColor();
 			WriteSuffixAndFinishLine(suffix);
@@ -2074,6 +2103,10 @@ namespace Crawler
 
 		internal static readonly HashSet<char> HighlightQuoteChars =
 		[
+			'\u0022',                                // " straight (ASCII) double — D056: the
+			                                         //   QUOTE_MIXED_KIND offender glyph; without it
+			                                         //   the straight quote stays uncoloured while the
+			                                         //   typographic partner shows as blue context
 			'\u201C', '\u201D', '\u201E', '\u201F', // double quotes
 			'\u2018', '\u2019', '\u201A',            // single quotes
 			'\u00AB', '\u00BB',                      // guillemets
@@ -2081,7 +2114,7 @@ namespace Crawler
 			'\u275D', '\u275E',                      // heavy quotes
 		];
 
-		// Typographic-ligature codepoints flagged by ContentQuality.CheckLigatures.
+		// Typographic-ligature codepoints flagged by Ligatures.Check.
 		// Kept in sync with ContentQuality.Ligatures (the detection-side dictionary);
 		// this set is the render-side mirror used to locate the glyphs in an excerpt
 		// for highlighting. U+FB00–U+FB06: ff fi fl ffi ffl ſt st.

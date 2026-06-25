@@ -2,7 +2,7 @@ namespace Crawler.Tests.SpellCheck
 {
 	using System.Collections.Generic;
 	using System.Linq;
-	using Crawler;               // QualityIssue
+	using Crawler.Quality;       // QualityIssue
 	using Crawler.SpellCheck;
 	using Xunit;
 
@@ -55,7 +55,7 @@ namespace Crawler.Tests.SpellCheck
 			Assert.Empty(WordCollisionMatcher.SeamTokens(excerpt));
 		}
 
-		private static ContentQuality.QualityIssue Collision(string filename, string excerpt)
+		private static QualityIssue Collision(string filename, string excerpt)
 			=> new(filename, WordCollisionMatcher.WordCollisionType, "merge", excerpt);
 
 		[Fact]
@@ -72,7 +72,7 @@ namespace Crawler.Tests.SpellCheck
 		{
 			var m = new WordCollisionMatcher(new[]
 			{
-				new ContentQuality.QualityIssue("page-1.html", "BARE_TEXT", "x", TrailingSeam),
+				new QualityIssue("page-1.html", "BARE_TEXT", "x", TrailingSeam),
 			});
 			Assert.True(m.IsEmpty);   // not a WORD_COLLISION → no seam tokens harvested
 		}

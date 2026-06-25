@@ -1,6 +1,7 @@
 namespace Crawler
 {
 	using System.Text;
+	using Crawler.Security;
 
 	/// <summary>
 	/// Central writer for all delimited log files produced by the crawler.
@@ -213,6 +214,106 @@ namespace Crawler
 			return string.Join(delimiter, sanitized);
 		}
 
+		// ── RFC 4180 CSV (quoted) ─────────────────────────────────────────
+		// Quoted-field counterpart to ComposeLine for content that legitimately contains the
+		// delimiter — SEO titles/descriptions hold ';', ',', '|', '@' freely, so there is no "rare"
+		// delimiter safe to strip. Instead of stripping, each field is sanitized for control/CR/LF/bidi
+		// (via the same SanitizeField path, using the '\uFFFF' sentinel so NO real delimiter is removed —
+		// content is preserved verbatim) and then quoted per RFC 4180 when it contains the delimiter or a
+		// double-quote. Records stay single-line (newlines are sanitized out), so the reader stays
+		// line-by-line. ParseCsvLine is the exact inverse.
+
+		/// <summary>
+		/// Compose one RFC 4180 CSV record: fields sanitized (control/CR/LF/bidi removed, delimiter
+		/// PRESERVED), each quoted when it contains <paramref name="delimiter"/> or a double-quote
+		/// (internal quotes doubled), joined with the single-char delimiter.
+		/// </summary>
+		public static string ComposeCsvLine(char delimiter, params string?[] fields)
+		{
+			if (fields.Length == 0)
+			{
+				return string.Empty;
+			}
+
+			var cells = new string[fields.Length];
+			for (int i = 0; i < fields.Length; i++)
+			{
+				// Neutralize on the RAW field first (before sanitization) so a leading
+				// TAB / CR formula trigger is escaped before SanitizeField folds it to a
+				// space. The apostrophe forces spreadsheet text mode; the export is the
+				// live formula-injection surface (see CsvInjectionGuard).
+				var guarded = CsvInjectionGuard.Neutralize(fields[i]);
+				// '\uFFFF' sentinel: full field sanitization (control/CR/LF/bidi) WITHOUT stripping the
+				// real delimiter — the content is preserved and fenced by quoting instead.
+				var cleaned = SanitizeField(guarded, '\uFFFF').Cleaned;
+				cells[i] = QuoteCsvField(cleaned, delimiter);
+			}
+
+			return string.Join(delimiter, cells);
+		}
+
+		private static string QuoteCsvField(string field, char delimiter)
+		{
+			// Newlines are already sanitized out, so only the delimiter and the quote char force quoting.
+			if (field.IndexOf(delimiter) < 0 && field.IndexOf('"') < 0)
+			{
+				return field;
+			}
+
+			return "\"" + field.Replace("\"", "\"\"") + "\"";
+		}
+
+		/// <summary>
+		/// Parse one RFC 4180 CSV record (single-line — the writer strips newlines) into its fields,
+		/// honoring "quoted" fields and doubled-quote ("") escapes. Inverse of ComposeCsvLine.
+		/// </summary>
+		public static string[] ParseCsvLine(string line, char delimiter)
+		{
+			var fields = new List<string>();
+			var sb = new StringBuilder();
+			bool inQuotes = false;
+
+			for (int i = 0; i < line.Length; i++)
+			{
+				char c = line[i];
+				if (inQuotes)
+				{
+					if (c == '"')
+					{
+						if (i + 1 < line.Length && line[i + 1] == '"')
+						{
+							sb.Append('"');
+							i++; // consume the second quote of an escaped pair
+						}
+						else
+						{
+							inQuotes = false; // closing quote
+						}
+					}
+					else
+					{
+						sb.Append(c);
+					}
+				}
+				else if (c == '"')
+				{
+					inQuotes = true; // opening quote
+				}
+				else if (c == delimiter)
+				{
+					fields.Add(sb.ToString());
+					sb.Clear();
+				}
+				else
+				{
+					sb.Append(c);
+				}
+			}
+
+			fields.Add(sb.ToString());
+			return fields.ToArray();
+		}
+
 		// ── File operations ───────────────────────────────────────────────
 
 		/// <summary>
@@ -265,7 +366,38 @@ namespace Crawler
 			FileIo.WriteAllLinesWithRetry(path, lines, Path.GetFileName(path));
 		}
 
-		// ── Streaming writer ──────────────────────────────────────────────
+		// ── Dual-locale CSV pair ──────────────────────────────────────────
+		// The suffix + extension convention for the two locale CSVs lives HERE, in one place, so
+		// callers pass only a base path (e.g. ".../25-asset-quality") and a change to the naming
+		// touches a single spot.
+		public const string CsvSemicolonSuffix = "_semicolon.csv";
+		public const string CsvCommaSuffix = "_comma.csv";
+
+		/// <summary>
+		/// Writes <paramref name="records"/> to two sibling CSV files —
+		/// <c>basePath + "_semicolon.csv"</c> (';' delimiter) and <c>basePath + "_comma.csv"</c>
+		/// (',' delimiter) — each field RFC 4180-quoted (<see cref="ComposeCsvLine"/>) and each file
+		/// UTF-8 BOM-prefixed, with NO "sep=" directive. This lets a German-locale Excel (';' list
+		/// separator) and an English-locale Excel (',') each double-click the file that column-splits
+		/// in their locale, off a single run. For human-facing logs that have no machine reader; the
+		/// header, if any, is the first record. Records are materialised once (two passes).
+		/// </summary>
+		public static void WriteCsvPair(string basePath, IEnumerable<string?[]> records)
+		{
+			var rows = records as IReadOnlyList<string?[]> ?? records.ToList();
+
+			var semicolonPath = basePath + CsvSemicolonSuffix;
+			FileIo.WriteAllLinesWithRetry(
+				semicolonPath,
+				rows.Select(r => ComposeCsvLine(';', r)),
+				Path.GetFileName(semicolonPath));
+
+			var commaPath = basePath + CsvCommaSuffix;
+			FileIo.WriteAllLinesWithRetry(
+				commaPath,
+				rows.Select(r => ComposeCsvLine(',', r)),
+				Path.GetFileName(commaPath));
+		}
 
 		/// <summary>
 		/// Streaming writer for cases where records are produced incrementally

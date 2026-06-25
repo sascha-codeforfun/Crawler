@@ -1,4 +1,5 @@
 using Crawler.SpellCheck;
+using Crawler.Lexicon;
 using Xunit;
 
 namespace Crawler.Tests
@@ -26,9 +27,9 @@ namespace Crawler.Tests
 
 		// In-memory bundle: every supplied word is accepted (SharedUser tier),
 		// everything else is a miss (System dictionary intentionally null).
-		private static DictionaryBundle Bundle(params string[] acceptedWords)
+		private static Bundle Bundle(params string[] acceptedWords)
 		{
-			var bundle = new DictionaryBundle();
+			var bundle = new Bundle();
 			foreach (var w in acceptedWords)
 			{
 				bundle.SharedUser.Add(w);
@@ -37,9 +38,9 @@ namespace Crawler.Tests
 		}
 
 		private static ToolsSpellChecker MakeChecker(
-			DictionaryBundle ctorBundle,
-			Dictionary<string, DictionaryBundle>? allBundles = null)
-			=> new(ctorBundle, allBundles ?? new Dictionary<string, DictionaryBundle>(), NoPrefixes, NoFugen);
+			Bundle ctorBundle,
+			Dictionary<string, Bundle>? allBundles = null)
+			=> new(ctorBundle, allBundles ?? new Dictionary<string, Bundle>(), NoPrefixes, NoFugen);
 
 		// ── projection ──────────────────────────────────────────────────────
 

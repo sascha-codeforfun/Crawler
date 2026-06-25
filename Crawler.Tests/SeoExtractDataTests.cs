@@ -1,27 +1,28 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
 	/// <summary>
 	/// Tests for SEO.ExtractDataAsync — verifies the per-file HTML field
 	/// extraction (title / description / robots / keywords / h1 count), the
-	/// filename → url/source lookup via UrlCache, the delimited output shape
-	/// (header row, "@@@" delimiter, UTF-8 BOM) and the byte-level encoding
-	/// detection path.
+	/// filename → url/source lookup via Cache, the delimited output shape
+	/// (header row, ';' RFC 4180-quoted delimiter, UTF-8 BOM, no sep= directive)
+	/// and the byte-level encoding detection path.
 	///
-	/// In the Logger collection: ExtractDataAsync reaches UrlCache lookups that
+	/// In the Logger collection: ExtractDataAsync reaches Cache lookups that
 	/// log via the static Logger singleton, so these must not run in parallel
 	/// with other Logger-touching classes.
 	///
-	/// UrlCache is process-wide static with no reset, so every test uses a
+	/// Cache is process-wide static with no reset, so every test uses a
 	/// GUID-unique source filename; lookups are keyed by filename and therefore
 	/// isolated from any entries other tests may have loaded.
 	/// </summary>
 	[Collection("Logger")]
 	public class SeoExtractDataTests : IDisposable
 	{
-		private const string Delimiter = "@@@";
+		private const char Delimiter = ';';
 
 		private readonly string _tempDir;
 
@@ -40,7 +41,7 @@ namespace Crawler.Tests
 
 		// ── helpers ───────────────────────────────────────────────────────────
 
-		// Unique HTML filename so the UrlCache lookup is deterministic.
+		// Unique HTML filename so the Cache lookup is deterministic.
 		private static string UniqueHtmlName() => $"page_{Guid.NewGuid():N}.html";
 
 		private string WriteHtml(string filename, string html)
@@ -81,7 +82,7 @@ namespace Crawler.Tests
 		private static string[] Lines(string outputPath) =>
 			File.ReadAllLines(outputPath); // UTF-8 read strips the BOM
 
-		private static string[] Cols(string line) => line.Split(Delimiter);
+		private static string[] Cols(string line) => IssueLogWriter.ParseCsvLine(line, Delimiter);
 
 		private static string[] DataRows(string outputPath) =>
 			Lines(outputPath).Skip(1).ToArray();
@@ -105,9 +106,9 @@ namespace Crawler.Tests
 			Assert.Equal(
 				new[]
 				{
-					"url", "robotsValue", "titleValue", "titleLength",
-					"descriptionValue", "descriptionLength", "keywordsValue",
-					"source", "h1Count"
+					"url", "robots", "title", "title_length",
+					"description", "description_length", "keywords",
+					"source", "h1_count"
 				},
 				header);
 		}
@@ -185,7 +186,7 @@ namespace Crawler.Tests
 
 			var lookup = Path.Combine(_tempDir, $"lookup_{Guid.NewGuid():N}.log");
 			File.WriteAllLines(lookup, new[] { $"{filename}|{url}|discovery" }, Encoding.UTF8);
-			UrlCache.LoadCache(lookup);
+			Cache.Load(lookup);
 
 			var rows = (await RunSingleAsync(Doc(title: "T"), filename)).Skip(1).ToArray();
 			var c = Cols(Assert.Single(rows));
@@ -251,6 +252,22 @@ namespace Crawler.Tests
 			var bytes = File.ReadAllBytes(output);
 			Assert.True(bytes.Length >= 3);
 			Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, bytes.Take(3).ToArray());
+		}
+
+		[Fact]
+		public async Task Output_NoSepDirective_FirstLineIsHeader()
+		{
+			// German Excel honours the BOM (correct umlauts) only when there is no "sep="
+			// line — a sep= directive makes Excel fall back to the locale code page and
+			// mojibake the umlauts. German Excel already splits on ';', so BOM + ';' is
+			// enough. Guard: the writer must not emit sep=, and the first line is the header.
+			WriteHtml(UniqueHtmlName(), Doc(title: "T"));
+			var output = OutputPath();
+			await SEO.ExtractDataAsync(_tempDir, output, "*.html");
+
+			var raw = File.ReadAllLines(output); // UTF-8 read strips the BOM
+			Assert.StartsWith("url;", raw[0]);
+			Assert.DoesNotContain(raw, l => l.StartsWith("sep=", StringComparison.OrdinalIgnoreCase));
 		}
 
 		[Fact]

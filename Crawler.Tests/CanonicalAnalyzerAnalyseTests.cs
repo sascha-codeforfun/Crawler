@@ -52,8 +52,8 @@ namespace Crawler.Tests
 		private List<IssueTracking.IssueRecord> Analyse(string indexPath,
 			IReadOnlyList<string>? allowedSubdomains = null)
 		{
-			var logPath = Path.Combine(_temp, $"canon-log-{Guid.NewGuid():N}.log");
-			return CanonicalAnalyzer.Analyse(_downloadDir, indexPath, logPath, SiteBase,
+			var csvBase = Path.Combine(_temp, $"canon-log-{Guid.NewGuid():N}");
+			return CanonicalAnalyzer.Analyse(_downloadDir, indexPath, csvBase, SiteBase,
 				allowedSubdomains ?? Array.Empty<string>(), "*.html");
 		}
 
@@ -77,6 +77,25 @@ namespace Crawler.Tests
 			Assert.Equal("QUALITY", r.Type);
 			Assert.Equal("CANONICAL_404", r.Word);
 			Assert.Equal("https://example.com/page", r.Url);
+		}
+
+		[Fact]
+		public void Analyse_WritesDualLocaleCsvPair_WithHeader()
+		{
+			HtmlFile("page.html", "https://example.com/missing");
+			var index = WriteIndex(("page.html", "https://example.com/page"));
+			var csvBase = Path.Combine(_temp, $"canon-csv-{Guid.NewGuid():N}");
+
+			CanonicalAnalyzer.Analyse(_downloadDir, index, csvBase, SiteBase,
+				Array.Empty<string>(), "*.html");
+
+			var semicolon = csvBase + IssueLogWriter.CsvSemicolonSuffix;
+			var comma = csvBase + IssueLogWriter.CsvCommaSuffix;
+			Assert.True(File.Exists(semicolon), "semicolon CSV not written");
+			Assert.True(File.Exists(comma), "comma CSV not written");
+
+			var header = IssueLogWriter.ParseCsvLine(File.ReadAllLines(semicolon)[0], ';');
+			Assert.Equal(new[] { "PageUrl", "IssueType", "CanonicalUrl", "Detail" }, header);
 		}
 
 		[Fact]

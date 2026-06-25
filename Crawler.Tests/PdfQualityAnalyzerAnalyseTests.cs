@@ -1,5 +1,6 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
@@ -13,22 +14,22 @@ namespace Crawler.Tests
 	/// Extract* helpers are covered by PdfQualityAnalyzerTests; this drives the
 	/// orchestration, the gap→IssueRecord mapping, and both Excerpt branches.
 	/// SYNTHETIC fixtures. In the Logger collection: Analyse / CrawlIndex log via the
-	/// static Logger; UrlCache is process-wide so URL fixtures use distinct names.
+	/// static Logger; Cache is process-wide so URL fixtures use distinct names.
 	/// </summary>
 	[Collection("Logger")]
 	public class PdfQualityAnalyzerAnalyseTests : IDisposable
 	{
 		private readonly string _dir;
-		private readonly string _qualityLog;
-		private readonly string _remediationLog;
+		private readonly string _qualityCsvBase;
+		private readonly string _remediationCsvBase;
 
 		public PdfQualityAnalyzerAnalyseTests()
 		{
 			_dir = Path.Combine(Path.GetTempPath(), $"pdfq-{Guid.NewGuid():N}");
 			Directory.CreateDirectory(_dir);
 			Logger.Initialize(Path.Combine(_dir, "test.log"), silent: true);
-			_qualityLog = Path.Combine(_dir, "pdf_quality.log");
-			_remediationLog = Path.Combine(_dir, "pdf_remediation.log");
+			_qualityCsvBase = Path.Combine(_dir, "pdf_quality");
+			_remediationCsvBase = Path.Combine(_dir, "pdf_remediation");
 		}
 
 		public void Dispose()
@@ -47,11 +48,11 @@ namespace Crawler.Tests
 		{
 			var path = Path.Combine(_dir, $"lookup_{Guid.NewGuid():N}.lku");
 			File.WriteAllLines(path, new[] { $"{filename}|{url}|discovery" }, Encoding.UTF8);
-			UrlCache.LoadCache(path);
+			Cache.Load(path);
 		}
 
 		private List<IssueTracking.IssueRecord> Analyse() =>
-			PdfQualityAnalyzer.Analyse(_dir, _qualityLog, _remediationLog);
+			PdfQualityAnalyzer.Analyse(_dir, _qualityCsvBase, _remediationCsvBase);
 
 		// ── tests ───────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ namespace Crawler.Tests
 		public void Analyse_DirectoryMissing_ReturnsEmpty()
 		{
 			Assert.Empty(PdfQualityAnalyzer.Analyse(
-				Path.Combine(_dir, "nope"), _qualityLog, _remediationLog));
+				Path.Combine(_dir, "nope"), _qualityCsvBase, _remediationCsvBase));
 		}
 
 		[Fact]
@@ -68,7 +69,9 @@ namespace Crawler.Tests
 			File.WriteAllText(Path.Combine(_dir, "note.txt"), "not a pdf");
 
 			Assert.Empty(Analyse());
-			Assert.True(File.Exists(_qualityLog)); // WriteLog called even with no results
+			// WriteCsvPair called even with no results — header-only pair written.
+			Assert.True(File.Exists(_qualityCsvBase + IssueLogWriter.CsvSemicolonSuffix));
+			Assert.True(File.Exists(_qualityCsvBase + IssueLogWriter.CsvCommaSuffix));
 		}
 
 		[Fact]

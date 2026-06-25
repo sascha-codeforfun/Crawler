@@ -7,7 +7,7 @@ namespace Crawler.Tests
 	/// Tests for the SEO derived-issue checks in <see cref="IssueTracking.PromoteFromSeo"/>:
 	/// title/description length, meta-keywords policy, H1 presence/uniqueness, and the
 	/// {title} template strip + conformance logic. PromoteFromSeo is pure (reads a log,
-	/// returns records), so these feed synthetic 08-seo-data.log lines and assert findings.
+	/// returns records), so these feed synthetic 08-seo-data.csv lines and assert findings.
 	/// </summary>
 	[Collection("Logger")]
 	public class SeoPromoteTests : IDisposable
@@ -33,16 +33,21 @@ namespace Crawler.Tests
 		// Column order: url robots title titleLen desc descLen keywords source h1Count
 		private static string Row(string url, string robots, string title, string desc,
 			string keywords, string source, int h1Count)
-			=> string.Join("@@@", url, robots, title, title.Length.ToString(),
+			=> IssueLogWriter.ComposeCsvLine(';', url, robots, title, title.Length.ToString(),
 				desc, desc.Length.ToString(), keywords, source, h1Count.ToString());
 
 		private string WriteLog(params string[] dataRows)
 		{
-			var path = Path.Combine(_tempDir, "08-seo-data.log");
+			var path = Path.Combine(_tempDir, "08-seo-data.csv");
 			var lines = new List<string>
 			{
-				"url@@@robotsValue@@@titleValue@@@titleLength@@@descriptionValue@@@" +
-				"descriptionLength@@@keywordsValue@@@source@@@h1Count"
+				// The writer no longer emits "sep=" (it breaks Excel's BOM/UTF-8 detection),
+				// but pre-D085 files carry one — keep it here so this also covers the reader
+				// still skipping a legacy sep= directive.
+				"sep=;",
+				IssueLogWriter.ComposeCsvLine(';',
+					"url", "robots", "title", "title_length", "description",
+					"description_length", "keywords", "source", "h1_count")
 			};
 			lines.AddRange(dataRows);
 			File.WriteAllText(path, string.Join("\n", lines), new UTF8Encoding(false));

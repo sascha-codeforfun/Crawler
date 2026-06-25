@@ -4,6 +4,7 @@ namespace Crawler.SpellCheck
 	using System.Collections.Generic;
 	using System.Linq;
 	using System.Text.RegularExpressions;
+	using Crawler.Quality;
 
 	/// <summary>
 	/// Cross-pass dedup. A WORD_COLLISION reported by content-quality (an inline element abutting
@@ -36,7 +37,7 @@ namespace Crawler.SpellCheck
 		// filename -> the merged seam tokens reported for that file
 		private readonly Dictionary<string, HashSet<string>> _byFile;
 
-		public WordCollisionMatcher(IEnumerable<ContentQuality.QualityIssue>? collisions)
+		internal WordCollisionMatcher(IEnumerable<QualityIssue>? collisions)
 		{
 			_byFile = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 			if (collisions == null)

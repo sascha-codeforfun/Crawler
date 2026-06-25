@@ -9,7 +9,7 @@ namespace Crawler
 	/// <see cref="CrawlHistoryDiagnosticConfig.HeaderExtractors"/>; any malformed
 	/// pattern halts the app with a pointed message naming the offending entry.
 	///
-	/// Mirrors <c>DictionaryIntegrity.CheckOrHalt</c> in shape and rationale:
+	/// Mirrors <c>Integrity.CheckOrHalt</c> in shape and rationale:
 	/// validate early, halt with one combined message that names every
 	/// individual failure across the list (so the operator can fix all entries
 	/// in one editing pass rather than fix-one, run, fix-next).

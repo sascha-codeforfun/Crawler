@@ -153,7 +153,6 @@ namespace Crawler
 				(cq.CheckControlCharsInContent, "control-chars"),
 				(cq.CheckQuoteSystemMixing, "quote-mixing"),
 				(cq.CheckQuotePairing, "quote-pairing"),
-				(cq.CheckQuotePairingVerification, "quote-pairing-verify"),
 				(cq.CheckPotentialTranslation, "translation"),
 				(cq.CheckSplitWordAnchors, "split-word-anchors"),
 				(cq.CheckMisplacedAnchors, "misplaced-anchors"),

@@ -1,10 +1,10 @@
 namespace Crawler.SpellCheck
 {
 	using System;
+	using Crawler.Lexicon;
 	using System.Collections.Generic;
 	using System.IO;
 	using System.Linq;
-	using System.Text;
 	using System.Text.RegularExpressions;
 	using HtmlAgilityPack;
 
@@ -66,7 +66,7 @@ namespace Crawler.SpellCheck
 			string blobPath,
 			string findingsPath,
 			IReadOnlyList<string> dictionaries,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles,
+			IReadOnlyDictionary<string, Bundle> bundles,
 			IReadOnlyList<string> prefixesToStrip,
 			IReadOnlyList<string> fugenelemente,
 			Func<string, string> fileToUrl)
@@ -84,7 +84,7 @@ namespace Crawler.SpellCheck
 			Func<string, string> fileToUrl)
 		{
 			int blocks = 0;
-			using var writer = new StreamWriter(blobPath, append: false, new UTF8Encoding(false));
+			using var writer = new StreamWriter(blobPath, append: false, IssueLogWriter.Utf8WithBom);
 			writer.WriteLine("// 28 — bulk inline-<script> blob (BulkScanPageScript). Headers are // comments, inert when re-scanned.");
 			writer.WriteLine();
 
@@ -151,11 +151,11 @@ namespace Crawler.SpellCheck
 			string blobPath,
 			string findingsPath,
 			IReadOnlyList<string> dictionaries,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles,
+			IReadOnlyDictionary<string, Bundle> bundles,
 			IReadOnlyList<string> prefixesToStrip,
 			IReadOnlyList<string> fugenelemente)
 		{
-			using var outw = new StreamWriter(findingsPath, append: false, new UTF8Encoding(false));
+			using var outw = new StreamWriter(findingsPath, append: false, IssueLogWriter.Utf8WithBom);
 			outw.WriteLine("# 29 — bulk page-script scan findings (BulkScanPageScript)");
 
 			if (dictionaries == null || dictionaries.Count == 0 || !dictionaries.All(bundles.ContainsKey))
@@ -171,8 +171,8 @@ namespace Crawler.SpellCheck
 			string blob = File.ReadAllText(blobPath);
 			var headers = HeaderOffsets(blob);
 
-			var bundlesConcrete = bundles as Dictionary<string, DictionaryBundle>
-				?? new Dictionary<string, DictionaryBundle>(bundles, StringComparer.OrdinalIgnoreCase);
+			var bundlesConcrete = bundles as Dictionary<string, Bundle>
+				?? new Dictionary<string, Bundle>(bundles, StringComparer.OrdinalIgnoreCase);
 			var checker = new ToolsSpellChecker(bundlesConcrete[dictionaries[0]], bundlesConcrete, prefixesToStrip, fugenelemente);
 			var node = HtmlNode.CreateNode("<script></script>");
 

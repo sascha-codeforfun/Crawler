@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Crawler.Lexicon;
 using System.Text;
 using Crawler.SpellCheck;
 using HtmlAgilityPack;
@@ -63,9 +64,9 @@ namespace Crawler.Tests
 
 		// In-memory bundle: supplied words accepted (SharedUser), System null so
 		// everything else is a miss.
-		private static DictionaryBundle Bundle(params string[] acceptedWords)
+		private static Bundle Bundle(params string[] acceptedWords)
 		{
-			var bundle = new DictionaryBundle();
+			var bundle = new Bundle();
 			foreach (var w in acceptedWords)
 			{
 				bundle.SharedUser.Add(w);
@@ -77,7 +78,7 @@ namespace Crawler.Tests
 
 		private IReadOnlyList<WordTicket> RunEngine(
 			IEnumerable<NewSpellEngineRunner.FileInput> files,
-			Dictionary<string, DictionaryBundle> bundles,
+			Dictionary<string, Bundle> bundles,
 			Func<string, HtmlDocument, string> resolveLanguage,
 			SpellCheckEngineConfig config,
 			int maxDop = 1)
@@ -88,7 +89,7 @@ namespace Crawler.Tests
 		// concrete Dictionary, and a file sequence that may not be an IReadOnlyList.
 		private IReadOnlyList<WordTicket> RunRaw(
 			IEnumerable<NewSpellEngineRunner.FileInput> files,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles,
+			IReadOnlyDictionary<string, Bundle> bundles,
 			Func<string, HtmlDocument, string> resolveLanguage,
 			SpellCheckEngineConfig config,
 			int maxDop,
@@ -323,7 +324,7 @@ namespace Crawler.Tests
 			// url resolver returns null → "?? file.Filename" supplies the url.
 			var tickets = RunRaw(
 				new[] { File_("p1.html") },
-				new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() },
+				new Dictionary<string, Bundle> { ["en"] = Bundle() },
 				Lang("en"),
 				new SpellCheckEngineConfig(),
 				1,
@@ -341,8 +342,8 @@ namespace Crawler.Tests
 
 			// A read-only dictionary is IReadOnlyDictionary but not Dictionary, so the
 			// "as Dictionary ?? new Dictionary(clone)" fallback materializes a copy.
-			var bundles = new ReadOnlyDictionary<string, DictionaryBundle>(
-				new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() });
+			var bundles = new ReadOnlyDictionary<string, Bundle>(
+				new Dictionary<string, Bundle> { ["en"] = Bundle() });
 
 			var tickets = RunRaw(
 				new[] { File_("p1.html") },
@@ -367,7 +368,7 @@ namespace Crawler.Tests
 
 			var tickets = RunRaw(
 				lazy,
-				new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() },
+				new Dictionary<string, Bundle> { ["en"] = Bundle() },
 				Lang("en"),
 				new SpellCheckEngineConfig(),
 				1,

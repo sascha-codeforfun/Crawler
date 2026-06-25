@@ -1,6 +1,8 @@
 namespace Crawler
 {
 	using System.Collections.Generic;
+	using Crawler.Snapshots;
+	using Crawler.Lexicon;
 	using System.Diagnostics.CodeAnalysis;
 	using System.Text;
 	using System.Text.Json;
@@ -28,7 +30,7 @@ namespace Crawler
 
 	public class DictionariesStore
 	{
-		public Dictionary<string, DictionaryBundle> LanguageBundles { get; } = [];
+		public Dictionary<string, Bundle> LanguageBundles { get; } = [];
 		public HashSet<string> SharedSite { get; } = new(StringComparer.OrdinalIgnoreCase);
 		public HashSet<string> SharedUser { get; } = new(StringComparer.OrdinalIgnoreCase);
 	}
@@ -143,10 +145,10 @@ namespace Crawler
 			// the dictionaries\ folder + readme exist so the operator knows where to
 			// start. Complements the integrity check below, which owns the configured
 			// cases; this fills the gap where nothing is configured at all.
-			DictionarySignpost.EmitIfUnconfigured(config);
+			Signpost.EmitIfUnconfigured(config);
 
 			// Dictionary integrity check. Verifies that every
-			// configured DictionaryBundle's .dic/.aff file matches the SHA-256
+			// configured Bundle's .dic/.aff file matches the SHA-256
 			// checksum recorded in config. On the first run after a config
 			// upgrade, the operator pastes the actual checksums (written to
 			// application.log) into config and re-runs. On subsequent runs,
@@ -155,7 +157,7 @@ namespace Crawler
 			// Runs as early as possible — after config load, before any
 			// network I/O or pipeline setup. By the time we get here we have
 			// a valid Config object; nothing downstream can subvert it.
-			if (!DictionaryIntegrity.CheckOrHalt(config))
+			if (!Integrity.CheckOrHalt(config))
 			{
 				if (!_silent)
 				{
@@ -167,7 +169,7 @@ namespace Crawler
 			// Validate the crawl-history-diagnostic config (extractor regexes). The
 			// diagnostic itself is DEBUG-only; the config validation is not, because
 			// a broken regex in config.private.json shouldn't ship in any build
-			// flavour. Same halt pattern as DictionaryIntegrity.CheckOrHalt — one
+			// flavour. Same halt pattern as Integrity.CheckOrHalt — one
 			// framed message naming every offending entry so the operator fixes
 			// all in one pass.
 			if (!CrawlHistoryDiagnosticConfigValidator.CheckOrHalt(config))
@@ -306,7 +308,7 @@ namespace Crawler
 				return;
 			}
 
-			ctx.TimeStamp = Tools.GetTimeStamp(
+			ctx.TimeStamp = SnapshotFolder.NewName(
 				ctx.IsDebugSession,
 				config.DebugTimeStamp,
 				Path.Combine(workingFolder, urlDirectory));
@@ -315,8 +317,8 @@ namespace Crawler
 			// Site-root tracking files — live one level up from the timestamp
 			// folder for fixed Power Query paths, so they are NOT rebuilt by
 			// RebuildTimestampPaths.
-			ctx.IssueTrackingPath = Path.Combine(workingFolder, urlDirectory, "IssueTracking.log");
-			ctx.TicketTextPath = Path.Combine(workingFolder, urlDirectory, "TicketText.log");
+			ctx.IssueTrackingPath = Path.Combine(workingFolder, urlDirectory, LogFileNames.IssueTracking);
+			ctx.TicketTextPath = Path.Combine(workingFolder, urlDirectory, LogFileNames.TicketText);
 
 			// Commit eligibility (path half): the run analyses the LATEST snapshot
 			// when it is a fresh crawl (N) or a replay of the most-recent snapshot
@@ -380,8 +382,8 @@ namespace Crawler
 					Logger.LogInfo("Updating IssueTracking.log.");
 				var existingIssues = IssueTracking.Load(ctx.IssueTrackingPath);
 				List<IssueTracking.IssueRecord> detectedIssues = [];
-				detectedIssues.AddRange(IssueTracking.PromoteFrom404(ctx.ErrorSourcesLogPath));
-				detectedIssues.AddRange(IssueTracking.PromoteFromSelfLink(ctx.SelfLinkAnalysisPath));
+				detectedIssues.AddRange(IssueTracking.PromoteFrom404(ctx.ErrorSourcesCsvBasePath));
+				detectedIssues.AddRange(IssueTracking.PromoteFromSelfLink(ctx.SelfLinkAnalysisCsvBasePath));
 				detectedIssues.AddRange(IssueTracking.PromoteFromRedirect(ctx.RedirectAnalysisPath));
 				detectedIssues.AddRange(IssueTracking.PromoteFromQuality(ctx.ContentQualityLogPath));
 				detectedIssues.AddRange(IssueTracking.PromoteFromSeo(ctx.SeoDataPath, config.Seo));

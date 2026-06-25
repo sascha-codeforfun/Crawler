@@ -1,4 +1,5 @@
 using System.Text;
+using Crawler.Lexicon;
 using Crawler.SpellCheck;
 using Xunit;
 
@@ -13,7 +14,7 @@ namespace Crawler.Tests
 	///
 	/// Bundles are in-memory (SharedUser accepts, System null = miss). The page
 	/// fixture is written UTF-8-with-BOM so DomTraverser's encoding detection (used
-	/// by ScriptPageIndex.BuildFromDownload) is deterministic. No UrlCache: Run
+	/// by ScriptPageIndex.BuildFromDownload) is deterministic. No Cache: Run
 	/// resolves URLs solely through the injected fileToUrl. SYNTHETIC fixtures.
 	///
 	/// The pure helpers, BuildBundleFindings and Run's early return are covered by
@@ -49,9 +50,9 @@ namespace Crawler.Tests
 
 		// ── helpers ───────────────────────────────────────────────────────────
 
-		private static DictionaryBundle Bundle(params string[] acceptedWords)
+		private static Bundle Bundle(params string[] acceptedWords)
 		{
-			var bundle = new DictionaryBundle();
+			var bundle = new Bundle();
 			foreach (var w in acceptedWords)
 			{
 				bundle.SharedUser.Add(w);
@@ -72,7 +73,7 @@ namespace Crawler.Tests
 		private JsFileScanner.Result RunScan(
 			Func<string, string> fileToUrl,
 			IReadOnlyList<string> dictionaries,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles,
+			IReadOnlyDictionary<string, Bundle> bundles,
 			int reachThreshold = 3)
 			=> JsFileScanner.Run(
 				_dir, _full, _trim, _unique, _routing,
@@ -86,7 +87,7 @@ namespace Crawler.Tests
 		public void Run_SurvivingFinding_UnresolvedBundle_RecordsAndWritesLogs()
 		{
 			WriteJs("app.js", "var t = \"hallo welt guten morgen wolrd\";"); // 4 accepted + 1 miss
-			var bundles = new Dictionary<string, DictionaryBundle>
+			var bundles = new Dictionary<string, Bundle>
 			{
 				["en"] = Bundle("hallo", "welt", "guten", "morgen"),
 			};
@@ -106,7 +107,7 @@ namespace Crawler.Tests
 		public void Run_GatedLiteral_DemotedNoFinding()
 		{
 			WriteJs("app.js", "var t = \"wolrd zzqx qwxz frpl glmp\";"); // all-miss → demoted
-			var bundles = new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() };
+			var bundles = new Dictionary<string, Bundle> { ["en"] = Bundle() };
 
 			var r = RunScan(_ => "https://site.test/app.js", En, bundles);
 
@@ -125,7 +126,7 @@ namespace Crawler.Tests
 				.Concat(Encoding.UTF8.GetBytes("cd\";"))
 				.ToArray();
 			WriteJsBytes("app.js", bytes);
-			var bundles = new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() };
+			var bundles = new Dictionary<string, Bundle> { ["en"] = Bundle() };
 
 			var r = RunScan(_ => "https://site.test/app.js", En, bundles);
 
@@ -138,7 +139,7 @@ namespace Crawler.Tests
 		{
 			WriteJs("app.js", "var t = \"hallo welt guten morgen wolrd\";");
 			WritePage("page.html", "<html><body><script src=\"/app.js\"></script></body></html>");
-			var bundles = new Dictionary<string, DictionaryBundle>
+			var bundles = new Dictionary<string, Bundle>
 			{
 				["en"] = Bundle("hallo", "welt", "guten", "morgen"),
 			};
@@ -158,6 +159,39 @@ namespace Crawler.Tests
 			Assert.False(bf.IsBulk); // reach 1 ≤ threshold 3
 			Assert.Contains(bf.Pages, p => p.Contains("site.test/page"));
 			Assert.Contains("CLEAR", File.ReadAllText(_routing));
+		}
+
+		// ── D082: BOM contract on the produced logs ───────────────────────────
+		// The four JS-scan writers (30 full / 31 trim / 32 unique / 33 routing) used
+		// new UTF8Encoding(false) before D082. Same end-to-end finding scenario; assert the
+		// byte-level encoding on each log the run produced.
+		[Fact]
+		public void Run_OutputLogs_StartWithUtf8Bom()
+		{
+			WriteJs("app.js", "var t = \"hallo welt guten morgen wolrd\";");
+			var bundles = new Dictionary<string, Bundle>
+			{
+				["en"] = Bundle("hallo", "welt", "guten", "morgen"),
+			};
+			RunScan(_ => "https://site.test/page", En, bundles);
+
+			bool any = false;
+			foreach (var path in new[] { _full, _trim, _unique, _routing })
+			{
+				if (!File.Exists(path))
+				{
+					continue;
+				}
+
+				any = true;
+				var bytes = File.ReadAllBytes(path);
+				Assert.True(bytes.Length >= 3, $"'{path}' is shorter than 3 bytes — no BOM.");
+				Assert.Equal((byte)0xEF, bytes[0]);
+				Assert.Equal((byte)0xBB, bytes[1]);
+				Assert.Equal((byte)0xBF, bytes[2]);
+			}
+
+			Assert.True(any, "expected the scan to write at least one output log to assert a BOM on.");
 		}
 	}
 }

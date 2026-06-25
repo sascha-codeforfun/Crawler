@@ -15,7 +15,7 @@ namespace Crawler.Tests
 	/// </summary>
 	public class ContentQualityLigatureSpansTests
 	{
-		// The seven ligatures ContentQuality.CheckLigatures flags.
+		// The seven ligatures Ligatures.Check flags.
 		private const char Ff = '\uFB00';   // ﬀ
 		private const char Fi = '\uFB01';   // ﬁ
 		private const char Fl = '\uFB02';   // ﬂ

@@ -51,7 +51,7 @@ namespace Crawler.SpellCheck
 		/// &lt;script src&gt; is resolved relative to its own URL, reduced to a stable key, and
 		/// inverted to key→{pages}. Operates on already-DECODED HTML, so it carries no dependency on
 		/// byte→encoding detection (an app-global concern) — that lives only in the disk path below.
-		/// Pure; no disk, no UrlCache.
+		/// Pure; no disk, no Cache.
 		/// </summary>
 		public static ScriptPageIndex Build(IEnumerable<(string PageUrl, string Html)> pages)
 		{

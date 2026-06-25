@@ -185,5 +185,28 @@ namespace Crawler.Tests
 				}
 			}
 		}
+
+		// ── WriteList (Content.Listing → 04-full-content.log) ─────────────
+		// Pre-D083 this used the default `new StreamWriter(path)` (BOM-less UTF-8),
+		// so 04-full-content.log shipped without a BOM while every sibling log had one.
+
+		[Fact]
+		public void WriteList_ProducesBomPrefixedFile()
+		{
+			var tempPath = Path.GetTempFileName();
+			try
+			{
+				FileIo.WriteList(tempPath, ["alpha", "beta"]);
+
+				AssertFileStartsWithUtf8Bom(tempPath);
+			}
+			finally
+			{
+				if (File.Exists(tempPath))
+				{
+					File.Delete(tempPath);
+				}
+			}
+		}
 	}
 }

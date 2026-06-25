@@ -3,12 +3,13 @@ namespace Crawler
 	using System.Collections.Concurrent;
 	using System.Diagnostics.CodeAnalysis;
 	using System.Text;
+	using Crawler.Urls;
 
 	/// <summary>
 	/// Builds and queries the crawl-log-derived URL/file index. CreateLookupFile writes
 	/// the on-disk index (02-crawler-index.log) from the raw crawl log; BuildLogIndex
 	/// produces the same filename->URL mapping in memory; LookUpUrlForFile/
-	/// LookUpSourceForFile are the safe lookup facades over UrlCache; GetLinesContainingKey
+	/// LookUpSourceForFile are the safe lookup facades over Cache; GetLinesContainingKey
 	/// filters crawl-log lines by key. Quarantined (.unverified) downloads are excluded
 	/// from the index uniformly.
 	/// </summary>
@@ -37,13 +38,13 @@ namespace Crawler
 							// Quarantined downloads (.unverified) are recorded in
 							// 00/01 (so they count for 404 detection) but must NOT enter the
 							// index — they are not analyzable pages. Excluding them here keeps
-							// them out of UrlCache and every index-driven analyzer.
-							if (identifier.EndsWith(Tools.UnverifiedExtension, StringComparison.OrdinalIgnoreCase))
+							// them out of Cache and every index-driven analyzer.
+							if (identifier.EndsWith(FileTypeClassifier.UnverifiedExtension, StringComparison.OrdinalIgnoreCase))
 							{
 								return;
 							}
 							// [KEEP] Column 3 (source) is optional — present when the URL was
-							// found via a specific discovery path. See Tools.Log source param.
+							// found via a specific discovery path. See CrawlLogWriter.Write source param.
 							// "discovery" = normal crawl link following
 							// "list"      = 05-not-directly-crawlable.log post-crawl pass
 							// Downstream readers that only use filename|url safely ignore col 3.
@@ -92,7 +93,7 @@ namespace Crawler
 		{
 			try
 			{
-				return UrlCache.LookUpSource(filenameToSearch);
+				return Cache.SourceFor(filenameToSearch);
 			}
 			catch (Exception ex)
 			{
@@ -103,13 +104,13 @@ namespace Crawler
 
 		public static string LookUpUrlForFile(string filenameToSearch)
 		{
-			// Mirrors UrlCache.LookUpUrl's miss sentinel; returned on a cache miss
-			// or lookup exception. See UrlCache.LookUpUrl for when "error" arises
+			// Mirrors Cache.UrlFor's miss sentinel; returned on a cache miss
+			// or lookup exception. See Cache.UrlFor for when "error" arises
 			// and how callers must handle it.
 			const string notFound = "error";
 			try
 			{
-				string url = UrlCache.LookUpUrl(filenameToSearch);
+				string url = Cache.UrlFor(filenameToSearch);
 				if (url != notFound)
 				{
 					return url;
@@ -144,7 +145,7 @@ namespace Crawler
 						string filename = parts[3].Trim();
 						// Quarantined (.unverified) downloads are not analyzable
 						// pages — keep them out of the index (uniform with CreateLookupFile).
-						if (filename.EndsWith(Tools.UnverifiedExtension, StringComparison.OrdinalIgnoreCase))
+						if (filename.EndsWith(FileTypeClassifier.UnverifiedExtension, StringComparison.OrdinalIgnoreCase))
 						{
 							continue;
 						}

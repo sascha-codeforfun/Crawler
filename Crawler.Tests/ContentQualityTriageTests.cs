@@ -403,6 +403,24 @@ namespace Crawler.Tests
 		}
 
 		[Fact]
+		public void ComputeQuoteSpans_StraightQuote_IsHighlightable_AndPaintsAsTrigger()
+		{
+			// D056: „Weiter" — German opener (context) + straight ASCII closer, which is
+			// the QUOTE_MIXED_KIND offender. The straight quote must be a highlightable
+			// glyph and, when supplied as a trigger, paint as the trigger — not stay
+			// invisible while only the typographic partner shows.
+			var text = "Klicken Sie auf \u201EWeiter\u0022.";
+			var straightPos = text.IndexOf('\u0022');
+			var spans = ContentQualityTriage.ComputeQuoteSpans(text, new[] { straightPos });
+
+			Assert.Equal(2, spans.Count);                                       // „ and " both highlighted
+			var straight = Assert.Single(spans, s => s.Start == straightPos);
+			Assert.True(straight.IsTrigger);                                    // offender → red
+			var opener = Assert.Single(spans, s => s.Start == text.IndexOf('\u201E'));
+			Assert.False(opener.IsTrigger);                                     // context → blue
+		}
+
+		[Fact]
 		public void ComputeQuoteSpans_MarksOnlyTriggerPosition_AsTrigger()
 		{
 			// Three U+2019: two possessive apostrophes + the flagged orphan. Only the
@@ -421,6 +439,103 @@ namespace Crawler.Tests
 			Assert.Empty(ContentQualityTriage.ComputeQuoteSpans(string.Empty, new[] { 0 }));
 		}
 
+		// ── FormatQuoteOffenders (hex evidence line) ──────────────────────────
+
+		[Fact]
+		public void FormatQuoteOffenders_SingleOffender_ShowsCodepointAndGlyph()
+		{
+			// „STOXX”  — German opener + U+201D wrong closer (the STOXX case).
+			var text = "(\u201ESTOXX\u201D)";
+			var pos = text.IndexOf('\u201D');
+			var line = ContentQualityTriage.FormatQuoteOffenders(text, new[] { pos });
+			Assert.Equal("U+201D \u201D", line);
+		}
+
+		[Fact]
+		public void FormatQuoteOffenders_DuplicateOffenders_CollapseWithCount()
+		{
+			// „123ab"  „55555"  — two straight U+0022 closers (the glossar case);
+			// they dedupe to one entry with ×2.
+			var text = "\u201E123ab\u0022 \u201E55555\u0022";
+			var positions = new List<int>();
+			for (int i = 0; i < text.Length; i++)
+			{
+				if (text[i] == '\u0022')
+				{
+					positions.Add(i);
+				}
+			}
+			var line = ContentQualityTriage.FormatQuoteOffenders(text, positions);
+			Assert.Equal("U+0022 \" \u00D72", line);
+		}
+
+		[Fact]
+		public void FormatQuoteOffenders_DistinctOffenders_ListedInTextOrder()
+		{
+			// A U+201D then a U+0022 → two entries, comma-joined, left-to-right in
+			// text order (matching the colourer's paint walk), regardless of the
+			// order the positions are supplied.
+			var text = "a\u201Db\u0022";
+			var line = ContentQualityTriage.FormatQuoteOffenders(
+				text, new[] { text.IndexOf('\u0022'), text.IndexOf('\u201D') });
+			Assert.Equal("U+201D \u201D, U+0022 \"", line);
+		}
+
+		[Fact]
+		public void FormatQuoteOffenders_SamePositionFlaggedTwice_CountedOnce()
+		{
+			// A glyph flagged by BOTH SYSTEM_MIX and UNMATCHED arrives as the same
+			// position twice. The colourer de-dupes (HashSet) and reds it once; the
+			// hex must agree — one glyph, no "×2". Regression: Czech [13] showed
+			// "U+201C ×2" against a single red U+201C.
+			var text = "a\u201Cb";
+			var pos = text.IndexOf('\u201C');
+			var line = ContentQualityTriage.FormatQuoteOffenders(text, new[] { pos, pos });
+			Assert.Equal("U+201C \u201C", line);
+		}
+
+		[Fact]
+		public void FormatQuoteOffenders_NoPositions_ReturnsEmpty()
+		{
+			Assert.Equal(string.Empty, ContentQualityTriage.FormatQuoteOffenders("abc", []));
+		}
+
+		[Fact]
+		public void FormatQuoteOffenders_OutOfRangePosition_Skipped()
+		{
+			Assert.Equal(string.Empty, ContentQualityTriage.FormatQuoteOffenders("ab", new[] { 99 }));
+		}
+
+		[Fact]
+		public void FormatQuoteOffenders_AstralOffender_DecodesSurrogatePair()
+		{
+			// An offender outside the BMP arrives as a high+low surrogate pair. The
+			// formatter must combine the pair into one code point (U+1Fxxx) and emit
+			// the two-char glyph, not format the lone high surrogate. \U0001F600 is a
+			// stand-in astral code point; the trigger sits on its high surrogate.
+			var text = "x\U0001F600y";
+			var pos = 1; // the astral code point begins at index 1 (its high surrogate)
+			var line = ContentQualityTriage.FormatQuoteOffenders(text, new[] { pos });
+			Assert.Equal("U+1F600 \U0001F600", line);
+		}
+
+		[Fact]
+		public void SynthesizeQuoteNote_DifferingShapeSystems_FallsBackToGenericMix()
+		{
+			// When the mixed systems do not share a shape suffix (German-double has
+			// shape "double"; Heavy has no hyphen, so no shape), the tidy
+			// "mixed X + Y <shape> quotes" form does not apply and the note falls
+			// back to the generic "mixed quote systems: …" listing.
+			var entries = new System.Collections.Generic.List<(string, string, string, string)>
+			{
+				("p.html", "QUOTE_SYSTEM_MIX", "Multiple quote systems: German-double, Heavy", ""),
+			};
+
+			Assert.Equal(
+				"mixed quote systems: German-double, Heavy",
+				ContentQualityTriage.SynthesizeQuoteNote(entries));
+		}
+
 		// ── WORD_COLLISION grouping ───────────────────────────────────────────
 
 		[Fact]
@@ -433,6 +548,27 @@ namespace Crawler.Tests
 			var groups = Groups(path).Where(g => g.DisplayType == "WORD_COLLISION").ToList();
 			Assert.Equal(2, groups.Count);
 			Assert.All(groups, g => Assert.False(g.IsTranslation));
+		}
+
+		[Fact]
+		public void BuildGroups_WordCollision_RecoversDocumentOrderFromRankPrefix()
+		{
+			// D047: the log can hold a page's collisions in reversed
+			// (ConcurrentBag/LIFO) order. BuildGroups re-sorts by the detector's
+			// "[N]" rank to page order (1-2-3) and takes the first-in-document
+			// excerpt, not the log-first one.
+			var path = LogFile(
+				"p.html|WORD_COLLISION|[2] Inline <span> abuts bare text without separator|<span class=\"h2\">Third</span>Cee",
+				"p.html|WORD_COLLISION|[1] Inline <span> abuts bare text without separator|<span class=\"h2\">Second</span>Bee",
+				"p.html|WORD_COLLISION|[0] Inline <span> abuts bare text without separator|<span class=\"h2\">First</span>Aaa");
+			var g = Groups(path).Single(x => x.DisplayType == "WORD_COLLISION");
+			// Excerpt is first-in-document (rank 0), not log-first (rank 2).
+			Assert.Contains("First", g.Excerpt);
+			// Display lines are in document order.
+			Assert.Equal(3, g.DisplayLines.Count);
+			Assert.Contains("First", g.DisplayLines[0]);
+			Assert.Contains("Second", g.DisplayLines[1]);
+			Assert.Contains("Third", g.DisplayLines[2]);
 		}
 
 		[Fact]

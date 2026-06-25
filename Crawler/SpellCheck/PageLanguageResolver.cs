@@ -1,6 +1,7 @@
 namespace Crawler.SpellCheck
 {
 	using System;
+	using Crawler.Lexicon;
 	using System.Collections.Generic;
 	using System.Linq;
 
@@ -28,35 +29,16 @@ namespace Crawler.SpellCheck
 		/// a prefix of the URL's path, the longest matching key's language list is returned (order
 		/// preserved); otherwise a single-element list holding <paramref name="branchLanguage"/>.
 		/// </summary>
+		// Resolution moved to the Html layer (Crawler.Html.PageLanguageSet) so spelling
+		// and content-quality share one resolver and cannot drift again. This forwards;
+		// behaviour is identical for spelling (it always passes a non-empty branch
+		// language, so the override-or-branch result is unchanged). ValidateBundles
+		// stays here because it is spell-config-specific (needs loaded dictionary bundles).
 		public static IReadOnlyList<string> Resolve(
 			string url,
 			string branchLanguage,
 			IReadOnlyDictionary<string, List<string>>? overrides)
-		{
-			if (overrides == null || overrides.Count == 0)
-			{
-				return new[] { branchLanguage };
-			}
-
-			string path = PathOf(url);
-
-			string? bestKey = null;
-			foreach (var key in overrides.Keys)
-			{
-				if (path.StartsWith(key, StringComparison.OrdinalIgnoreCase)
-					&& (bestKey == null || key.Length > bestKey.Length))
-				{
-					bestKey = key;
-				}
-			}
-
-			if (bestKey != null && overrides[bestKey] is { Count: > 0 } languages)
-			{
-				return languages.ToList();
-			}
-
-			return new[] { branchLanguage };
-		}
+			=> Crawler.Html.PageLanguageSet.Resolve(url, branchLanguage, overrides);
 
 		/// <summary>
 		/// Fail-fast configuration check: every language named in any override entry MUST have a loaded
@@ -66,7 +48,7 @@ namespace Crawler.SpellCheck
 		/// </summary>
 		public static void ValidateBundles(
 			IReadOnlyDictionary<string, List<string>>? overrides,
-			IReadOnlyDictionary<string, DictionaryBundle> loadedBundles)
+			IReadOnlyDictionary<string, Bundle> loadedBundles)
 		{
 			if (overrides == null || overrides.Count == 0)
 			{
@@ -94,36 +76,5 @@ namespace Crawler.SpellCheck
 			}
 		}
 
-		/// <summary>Strip scheme + host and query/fragment, leaving the path from the first '/'.</summary>
-		private static string PathOf(string url)
-		{
-			if (string.IsNullOrEmpty(url))
-			{
-				return string.Empty;
-			}
-
-			int schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
-			int start = 0;
-			if (schemeEnd >= 0)
-			{
-				int firstSlash = url.IndexOf('/', schemeEnd + 3);
-				start = firstSlash >= 0 ? firstSlash : url.Length;
-			}
-
-			int end = url.Length;
-			int q = url.IndexOf('?', start);
-			int h = url.IndexOf('#', start);
-			if (q >= 0)
-			{
-				end = q;
-			}
-
-			if (h >= 0 && h < end)
-			{
-				end = h;
-			}
-
-			return url.Substring(start, end - start);
-		}
 	}
 }

@@ -41,6 +41,54 @@ namespace Crawler.SpellCheck
 
 		internal static bool IsLatinFiller(string word) => !string.IsNullOrEmpty(word) && LatinFiller.Contains(word);
 
+		// 662 — the contiguous span of the lorem-ipsum block within an excerpt: from the START of the
+		// first distinctive filler token to the END of the last one, INCLUSIVE of any non-filler words
+		// and punctuation between them. Short ambiguous Latin (et, sit, cum, dis, …) is excluded from
+		// LatinFiller, so a strict token-by-token run would fragment; but the placeholder reads as one
+		// block, so it is reported as one span — used by the triage UI to light the whole block in the
+		// non-typo (WCAG) scheme. ASCII letter runs only: the filler vocabulary is ASCII and the excerpt
+		// may be raw script source. Returns (-1, 0) when the excerpt carries no filler token.
+		internal static (int Start, int Length) LocateFillerRun(string? excerpt)
+		{
+			if (string.IsNullOrEmpty(excerpt))
+			{
+				return (-1, 0);
+			}
+
+			int firstStart = -1;
+			int lastEnd = -1;
+			int i = 0;
+			while (i < excerpt.Length)
+			{
+				char c = excerpt[i];
+				if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+				{
+					int start = i;
+					while (i < excerpt.Length
+						&& ((excerpt[i] >= 'a' && excerpt[i] <= 'z') || (excerpt[i] >= 'A' && excerpt[i] <= 'Z')))
+					{
+						i++;
+					}
+
+					if (IsLatinFiller(excerpt[start..i]))
+					{
+						if (firstStart < 0)
+						{
+							firstStart = start;
+						}
+
+						lastEnd = i;
+					}
+				}
+				else
+				{
+					i++;
+				}
+			}
+
+			return firstStart >= 0 && lastEnd > firstStart ? (firstStart, lastEnd - firstStart) : (-1, 0);
+		}
+
 		// 663 — the lorem/ipsum markers often DON'T flag: common Latin roots (ipsum, dolor, amet, elit,
 		// aenean, massa…) match a loaded dictionary, so they never reach the findings. Detection therefore
 		// keys on the markers appearing in a finding's EXCERPT (the surrounding literal), not on them being

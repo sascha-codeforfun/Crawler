@@ -8,10 +8,10 @@ namespace Crawler
 		{
 			var htmlFiles = Directory.GetFiles(directoryPath, filePattern);
 
-			// Route through IssueLogWriter so the '@@@' delimiter is
-			// enforced and each crawled field (title / description / robots / keywords)
-			// is sanitized for CR / LF / control chars / bidi controls / the
-			// delimiter itself.
+			// Route through IssueLogWriter.ComposeCsvLine so each crawled field (title / description /
+			// robots / keywords) is sanitized for CR / LF / control chars / bidi controls and then
+			// RFC 4180-quoted for the ';' delimiter — SEO content holds ';', ',', '|', '@' freely, so
+			// no delimiter is safe to strip; quoting preserves the content verbatim.
 			// [KEEP] Sanitization-through-IssueLogWriter.ComposeLine is mandatory —
 			// previously a local Escape() handled CR/LF/TAB only; the centralised
 			// path is strictly more defensive.
@@ -20,11 +20,15 @@ namespace Crawler
 			// `new UTF8Encoding(false)` (no BOM), producing inconsistent output
 			// vs. the BOM-prefixed logs written via IssueLogWriter's non-streaming
 			// helpers (10, 16, 17, etc.).
+			// NO "sep=" directive: German Excel honours the UTF-8 BOM (correct umlauts)
+			// only when there is no "sep=" line — a sep= directive makes Excel fall back
+			// to the locale code page and mojibake the umlauts. German Excel already uses
+			// ';' as its list separator, so BOM + ';' data opens column-split without it.
 			using var writer = new StreamWriter(outputFilePath, append: false,
 				IssueLogWriter.Utf8WithBom);
-			await writer.WriteLineAsync(IssueLogWriter.ComposeLine(IssueLogWriter.SeoDelimiter,
-				"url", "robotsValue", "titleValue", "titleLength",
-				"descriptionValue", "descriptionLength", "keywordsValue", "source", "h1Count"));
+			await writer.WriteLineAsync(IssueLogWriter.ComposeCsvLine(';',
+				"url", "robots", "title", "title_length",
+				"description", "description_length", "keywords", "source", "h1_count"));
 
 			foreach (var htmlFile in htmlFiles)
 			{
@@ -64,7 +68,7 @@ namespace Crawler
 				string url = CrawlIndex.LookUpUrlForFile(filename);
 				string source = CrawlIndex.LookUpSourceForFile(filename);
 
-				await writer.WriteLineAsync(IssueLogWriter.ComposeLine(IssueLogWriter.SeoDelimiter,
+				await writer.WriteLineAsync(IssueLogWriter.ComposeCsvLine(';',
 					url, robotsValue, titleValue, titleLength.ToString(),
 					descriptionValue, descriptionLength.ToString(), keywordsValue, source, h1Count.ToString()));
 			}

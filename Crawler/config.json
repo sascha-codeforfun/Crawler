@@ -714,17 +714,6 @@
     // on pages with many apostrophes. Enable once system-mixing check is stable.
     "CheckQuotePairing": true,
 
-    // Second-pass verification of quote-pairing flags. When the cheap
-    // left-to-right pass produces a flag, a proximity-based verification
-    // pass re-examines the same block. If the offending character can be
-    // paired cleanly (nearest opener-closer, system-aware), the original
-    // flag is downgraded to QUOTE_AMBIGUOUS — "parsers disagree; review
-    // judgement required" rather than "definitely wrong."
-    // Operator workflow: filter QUOTE_AMBIGUOUS out of first-pass triage;
-    // review as a second QA pass when there is time. Turn off if AMBIGUOUS
-    // becomes noise on a stable site.
-    "CheckQuotePairingVerification": true,
-
     // When spell-check produces >= TranslationIssueErrorThreshold errors on a page,
     // check whether >= TranslationIssuePassRatio pass another loaded dictionary.
     // If so, flag as POTENTIAL_TRANSLATION in 10-content-quality-issues.log and remove

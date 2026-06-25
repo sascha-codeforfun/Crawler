@@ -6,6 +6,7 @@ namespace Crawler.Boilerplate
 	using System.Text;
 	using System.Threading.Tasks;
 	using Crawler;
+	using Crawler.Html;
 
 	/// <summary>
 	/// Produces the shared PRUNED HTML tree: each downloaded page with its operator-declared
@@ -18,7 +19,7 @@ namespace Crawler.Boilerplate
 	///
 	/// Governance is delegated WHOLLY to <see cref="BoilerplateResolver"/> (longest-PathPrefix
 	/// wins; check page = keep). This class only (a) converts the resolver's typed selectors to
-	/// the xpath removal idiom and (b) calls the existing <see cref="Tools.RemoveHtmlByXPath"/>
+	/// the xpath removal idiom and (b) calls the existing <see cref="MarkupFile.RemoveByXPath"/>
 	/// primitive (read → parse → remove → write utf8-no-bom) — no new IO/parse code, no edits to
 	/// Tools.
 	///
@@ -67,7 +68,7 @@ namespace Crawler.Boilerplate
 
 				// Even with an empty removal list this re-serialises the page through the same
 				// reader/writer, so the whole pruned tree is uniformly formatted (utf8-no-bom).
-				Tools.RemoveHtmlByXPath(file, removals, destinationDirectory);
+				MarkupFile.RemoveByXPath(file, removals, destinationDirectory);
 			});
 		}
 

@@ -6,7 +6,7 @@ namespace Crawler.Tests
 	/// Locks the behavior of <see cref="Crawl.CanonicalizeUrlForFetch"/>, the
 	/// pre-fetch URL canonicalization step that decides:
 	///   - whether to treat the URL as a modal carrier (unwrap via
-	///     <c>Tools.ExtractModalUrl</c>), or
+	///     <c>Query.ExtractModalUrl</c>), or
 	///   - to strip the query string entirely (blanket <c>Split('?')[0]</c>).
 	///
 	/// Regression here silently double-downloads (canonicalization broken) or

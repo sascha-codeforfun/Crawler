@@ -7,7 +7,7 @@ namespace Crawler
 	/// one specific class of operator config error: an entry with
 	/// <c>Enabled = true</c> and an empty or whitespace-only <c>Value</c>.
 	///
-	/// Why halt: <c>Tools.IsValidLink</c> applies each enabled exclusion via
+	/// Why halt: <c>Validity.IsInDownloadScope</c> applies each enabled exclusion via
 	/// <c>link.Contains(entry.Value, ...)</c>. <c>Contains("")</c> returns
 	/// <c>true</c> for every non-null string. An enabled empty-Value entry
 	/// would therefore reject every link the crawler considers, producing a

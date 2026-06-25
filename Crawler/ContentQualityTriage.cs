@@ -1,4 +1,6 @@
 using System.Text;
+using Crawler.Html;
+using Crawler.Quality;
 
 namespace Crawler
 {
@@ -54,7 +56,9 @@ namespace Crawler
 			ContentQualityConfig config,
 			string fileDownloadDirectory,
 			IReadOnlyList<UrlHighlightRule> urlHighlightRules,
-			Crawler.Boilerplate.BoilerplateResolver? boilerplateResolver = null)
+			Crawler.Boilerplate.BoilerplateResolver? boilerplateResolver = null,
+			IReadOnlyDictionary<string, List<string>>? pageLanguageOverrides = null,
+			string defaultLanguage = "")
 		{
 			List<IssueTracking.IssueRecord> promoted = [];
 
@@ -64,7 +68,9 @@ namespace Crawler
 				return promoted;
 			}
 
-			var groups = BuildGroups(qualityLogPath, qualityLogFilename, config, fileDownloadDirectory);
+			var groups = BuildGroups(
+				qualityLogPath, qualityLogFilename, config, fileDownloadDirectory,
+				pageLanguageOverrides, defaultLanguage);
 
 			// The set of tracking keys present in THIS crawl. A review item whose
 			// key is absent here is no longer detected — it was fixed, the page
@@ -87,7 +93,14 @@ namespace Crawler
 			// before suppression — mirrors spelling triage's ReviewTriagedItems.
 			// A discard here resets the record to 'new', so it survives the
 			// suppression filter below and flows back into the live walk.
-			ReviewTriagedQualityItems(issueTrackingPath, liveKeys, urlHighlightRules);
+			//
+			// D048: review renders WORD_COLLISION from this run's complete group
+			// (keyed by IssueRecord.Key), not the collapsed record's single stored
+			// excerpt — so every occurrence on a page shows, byte-identical to live
+			// triage. The map is the same BuildGroups accumulation triage walks; the
+			// liveKeys gate already guarantees a reviewed record has a group present.
+			var collisionContextsByKey = WordCollisionContextsByKey(groups);
+			ReviewTriagedQualityItems(issueTrackingPath, liveKeys, urlHighlightRules, collisionContextsByKey);
 
 			// [KEEP] Suppress groups already decided in IssueTracking.
 			// wontfix/config/fixed = operator decided, do not re-present.
@@ -141,6 +154,14 @@ namespace Crawler
 					: null;
 				ConsoleUi.WriteCardHeader(current, groups.Count, "Type", group.DisplayType, boilerTag);
 				ConsoleUi.WriteUrlField(group.Url, urlHighlightRules);
+
+				// D050: show what the finding was judged against — the resolved declared
+				// language set (single = system check enforced; multi/none = structure-only).
+				// Only QUOTE groups carry Languages, so only they show this line.
+				if (group.Languages is not null)
+				{
+					ConsoleUi.WriteField("Language", FormatLanguages(group.Languages));
+				}
 
 				foreach (var line in group.DisplayLines)
 				{
@@ -370,7 +391,8 @@ namespace Crawler
 			bool IsTranslation,
 			List<string> DisplayLines,  // lines shown in the triage UI
 			List<string>? TrackingWords = null,  // per-finding Words for 1:N promotion
-			IReadOnlyList<int>? QuoteTriggerPositions = null)  // glyph offsets in Excerpt to mark as the offender (QUOTE ISSUES)
+			IReadOnlyList<int>? QuoteTriggerPositions = null,  // glyph offsets in Excerpt to mark as the offender (QUOTE ISSUES)
+			IReadOnlyList<string>? Languages = null)  // D050: resolved declared language set, shown on the QUOTE card (what it was judged against)
 		{
 			/// <summary>
 			/// The Word(s) this group must promote as tracking records.
@@ -405,6 +427,7 @@ namespace Crawler
 					Comment = string.IsNullOrEmpty(userComment) ? Comment : userComment,
 					SourceLabel = DisplayType,
 					Excerpt = Excerpt,
+					Language = Languages is { Count: > 0 } ? string.Join(", ", Languages) : string.Empty,
 				});
 
 			/// <summary>
@@ -414,6 +437,62 @@ namespace Crawler
 			/// </summary>
 			public IEnumerable<string> TrackingKeys(string status) =>
 				ToIssueRecords(status, string.Empty).Select(r => r.Key);
+		}
+
+		// ── D050: language display ────────────────────────────────────────────
+		// Format the resolved declared-language set for the card. Empty set means
+		// nothing was declared (and the default was empty) — shown explicitly so the
+		// operator understands why no single-language system check applied.
+		private static string FormatLanguages(IReadOnlyList<string> languages)
+			=> languages.Count > 0 ? string.Join(", ", languages) : "(none declared)";
+
+		// ── D048: WORD_COLLISION de-mask source ───────────────────────────────
+		// The per-page collision group carries every occurrence in DisplayLines;
+		// promotion stores only a representative excerpt. These helpers expose the
+		// full group, keyed by IssueRecord.Key, so review and the per-page ticket
+		// render all N occurrences from the one log-10 accumulation rather than
+		// re-deriving from the collapsed record. Pilot-scoped to WORD_COLLISION.
+
+		/// <summary>
+		/// Extracts each WORD_COLLISION group's ordered occurrence contexts (the raw
+		/// html behind each "HTML    : " display line), keyed by the group's tracking
+		/// key (= the promoted IssueRecord.Key). Order is the document order
+		/// BuildGroups already established via the "[N]" rank.
+		/// </summary>
+		internal static Dictionary<string, List<string>> WordCollisionContextsByKey(
+			IEnumerable<TriageGroup> groups)
+		{
+			const string prefix = "HTML    : ";
+			var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+			foreach (var g in groups.Where(g => g.DisplayType == "WORD_COLLISION"))
+			{
+				var contexts = g.DisplayLines
+					.Where(l => l.StartsWith(prefix, StringComparison.Ordinal))
+					.Select(l => l[prefix.Length..])
+					.ToList();
+				foreach (var key in g.TrackingKeys("new"))
+				{
+					map[key] = contexts;
+				}
+			}
+			return map;
+		}
+
+		/// <summary>
+		/// Convenience overload for callers that hold only the log path (the ticket
+		/// step): re-accumulates this run's groups from log 10, then projects the
+		/// WORD_COLLISION contexts. Returns an empty map when the log is absent.
+		/// </summary>
+		internal static Dictionary<string, List<string>> WordCollisionContextsByKey(
+			string qualityLogPath, string qualityLogFilename,
+			ContentQualityConfig config, string fileDownloadDirectory)
+		{
+			if (!File.Exists(qualityLogPath))
+			{
+				return new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+			}
+			return WordCollisionContextsByKey(
+				BuildGroups(qualityLogPath, qualityLogFilename, config, fileDownloadDirectory));
 		}
 
 		// ── Group builder ─────────────────────────────────────────────────────
@@ -470,8 +549,84 @@ namespace Crawler
 			AddCount("QUOTE_UNMATCHED", "unclosed opener", "unclosed openers");
 			AddCount("QUOTE_WRONG_CLOSE", "mismatched closer", "mismatched closers");
 			AddCount("QUOTE_WRONG_OPEN", "mismatched opener", "mismatched openers");
+			AddCount("QUOTE_MIXED_KIND", "straight/typographic mix", "straight/typographic mixes");
 
 			return parts.Count > 0 ? string.Join("; ", parts) : "quote issues";
+		}
+
+		/// <summary>
+		/// Renders the offending glyph(s) at <paramref name="triggerPositions"/> in
+		/// <paramref name="excerpt"/> as a deduplicated, counted hex list for the
+		/// card's "Offenders" line — e.g. "U+201D ”" or "U+0022 \" ×2". Each entry
+		/// pairs the Unicode code point with the glyph as it rendered, so a finding
+		/// is self-proving: the byte and what it drew are both on the card, ending
+		/// the raw-HTML hex round-trip the diagnoses kept needing. Positions are the
+		/// SAME offsets the colourer uses (LocateFlags over the excerpt, D056), so
+		/// the hex and the red mark cannot disagree — positions are deduped by
+		/// position (as the colourer's HashSet does) and ordered left-to-right, so
+		/// a glyph flagged by two findings at once is one entry, and distinct
+		/// same-glyph offenders still collapse to "×N". Out-of-range positions are
+		/// skipped; an empty list yields "" (caller omits the line entirely).
+		/// Surrogate-guarded: a future astral-plane trigger prints the combined
+		/// code point (U+XXXXX), never a lone half-pair — though every quote glyph
+		/// in play is BMP.
+		/// </summary>
+		internal static string FormatQuoteOffenders(string excerpt, IReadOnlyList<int> triggerPositions)
+		{
+			if (string.IsNullOrEmpty(excerpt) || triggerPositions is not { Count: > 0 })
+			{
+				return string.Empty;
+			}
+
+			var order = new List<int>();                 // code points, in text order
+			var counts = new Dictionary<int, int>();
+			var glyphs = new Dictionary<int, string>();
+			// Dedupe by POSITION first — the colourer marks red via a HashSet of
+			// positions, so a glyph flagged by two findings at once (e.g. SYSTEM_MIX
+			// and UNMATCHED landing on the same opener) is one red mark, not two.
+			// Counting raw list entries would over-count it ("×2" with one red glyph,
+			// the Czech [13] divergence). Order left-to-right to match the paint walk.
+			foreach (var pos in triggerPositions.Distinct().OrderBy(p => p))
+			{
+				if (pos < 0 || pos >= excerpt.Length)
+				{
+					continue;
+				}
+
+				char c = excerpt[pos];
+				int cp;
+				string glyph;
+				if (char.IsHighSurrogate(c) && pos + 1 < excerpt.Length
+					&& char.IsLowSurrogate(excerpt[pos + 1]))
+				{
+					cp = char.ConvertToUtf32(c, excerpt[pos + 1]);
+					glyph = excerpt.Substring(pos, 2);
+				}
+				else
+				{
+					cp = c;
+					glyph = c.ToString();
+				}
+
+				if (!counts.ContainsKey(cp))
+				{
+					order.Add(cp);
+					glyphs[cp] = glyph;
+				}
+				counts[cp] = counts.GetValueOrDefault(cp) + 1;
+			}
+
+			if (order.Count == 0)
+			{
+				return string.Empty;
+			}
+
+			var parts = order.Select(cp =>
+			{
+				var tag = $"U+{cp:X4} {glyphs[cp]}";
+				return counts[cp] > 1 ? $"{tag} \u00D7{counts[cp]}" : tag;
+			});
+			return string.Join(", ", parts);
 		}
 
 		/// <summary>
@@ -507,7 +662,9 @@ namespace Crawler
 			string qualityLogPath,
 			string qualityLogFilename,
 			ContentQualityConfig config,
-			string fileDownloadDirectory)
+			string fileDownloadDirectory,
+			IReadOnlyDictionary<string, List<string>>? pageLanguageOverrides = null,
+			string defaultLanguage = "")
 		{
 			var lines = File.ReadAllLines(qualityLogPath, Encoding.UTF8)
 				.Where(l => l.Length > 0
@@ -554,7 +711,8 @@ namespace Crawler
 			// different blocks — excerpt showed the wrong block, context was misleading.
 			var quoteTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 			{
-				"QUOTE_SYSTEM_MIX", "QUOTE_UNMATCHED", "QUOTE_WRONG_CLOSE", "QUOTE_WRONG_OPEN"
+				"QUOTE_SYSTEM_MIX", "QUOTE_UNMATCHED", "QUOTE_WRONG_CLOSE", "QUOTE_WRONG_OPEN",
+				"QUOTE_MIXED_KIND",   // D053 completion: was detected + logged but never carded
 			};
 
 			var quotesByBlock = lines
@@ -583,27 +741,41 @@ namespace Crawler
 					display.Add($"Excerpt : {excerpt}");
 				}
 
+				// Resolve the page's declared language SET once (override → <html lang>
+				// → <meta> → default). Used twice: the trigger anchor below (exactly one
+				// declared language enables the system check; zero or many does not), and
+				// the "Language" line on the card so the operator sees what the item was
+				// held against. A file-read failure degrades to the empty set.
+				IReadOnlyList<string> languageSet = [];
+				if (!string.IsNullOrEmpty(fileDownloadDirectory))
+				{
+					try
+					{
+						languageSet = Crawler.Html.PageLanguageSet.Resolve(
+							url, entries[0].Filename, fileDownloadDirectory,
+							pageLanguageOverrides, defaultLanguage);
+					}
+					catch
+					{
+						languageSet = [];
+					}
+				}
+
 				// Locate the exact offending glyph(s) so the renderer can mark them as
 				// the trigger (red) and every other quote as context (blue). Reuses the
-				// detector on the stored block under the SAME page language analysis
-				// used (resolved from <html lang>), so the marked glyph matches the
-				// flagging decision. Any failure (missing file, language mismatch,
-				// pipe-sanitised block) degrades to context-only highlighting — never a
-				// wrong mark. Filtered to the types actually present in this block.
+				// detector on the stored block under the SAME page language analysis the
+				// detector uses (D049: anchored only when exactly one language is
+				// declared), so the marked glyph matches the flagging decision. Any
+				// failure (pipe-sanitised block, locate error) degrades to context-only
+				// highlighting — never a wrong mark. Filtered to the types present here.
 				IReadOnlyList<int> triggerPositions = [];
 				if (!string.IsNullOrEmpty(excerpt))
 				{
 					try
 					{
-						string? lang = null;
-						if (!string.IsNullOrEmpty(fileDownloadDirectory))
-						{
-							var resolved = HtmlLanguage.GetLanguageFromHtmlFile(
-								entries[0].Filename, fileDownloadDirectory, string.Empty);
-							lang = string.IsNullOrWhiteSpace(resolved) ? null : resolved;
-						}
+						string? lang = languageSet.Count == 1 ? languageSet[0] : null;
 						var typesPresent = distinctTypes.ToHashSet(StringComparer.Ordinal);
-						triggerPositions = ContentQuality.LocateQuoteFlags(excerpt, config, lang)
+						triggerPositions = Quotes.LocateFlags(excerpt, config, lang)
 							.Where(f => typesPresent.Contains(f.Type))
 							.Select(f => f.Pos)
 							.ToList();
@@ -615,6 +787,16 @@ namespace Crawler
 					}
 				}
 
+				// Self-proving evidence: the offending glyph(s) in U+XXXX hex paired
+				// with what they rendered as, on a dedicated line under the Note. Same
+				// positions the colourer uses, so hex and the red mark agree. Omitted
+				// when nothing was located (degrades to no line, never a wrong one).
+				var offenders = FormatQuoteOffenders(excerpt, triggerPositions);
+				if (offenders.Length > 0)
+				{
+					display.Insert(1, $"Offenders : {offenders}");
+				}
+
 				groups.Add(new TriageGroup(
 					DisplayType: "QUOTE ISSUES",
 					Url: url,
@@ -624,7 +806,8 @@ namespace Crawler
 					IsTranslation: false,
 					DisplayLines: display,
 					TrackingWords: distinctTypes,   // 1:N per-type promotion
-					QuoteTriggerPositions: triggerPositions));
+					QuoteTriggerPositions: triggerPositions,
+					Languages: languageSet));
 			}
 
 			// ── SPLIT_WORD_ANCHOR — group by page URL ─────────────────────────
@@ -786,16 +969,27 @@ namespace Crawler
 			{
 				var url = pageGroup.Key;
 				var entries = pageGroup.ToList();
+				// Recover page order from the detector's "[N]" source-rank prefix.
+				// The content-quality log freezes WORD_COLLISION findings in
+				// ConcurrentBag/LIFO order (WriteLog sorts only by Filename+
+				// IssueType, no tiebreaker), so a multi-collision page reads
+				// 3-2-1; re-sorting by the rank restores 1-2-3. The "[N]" prefix
+				// is only an ordering aid - display uses Context, so the bracket
+				// itself is never shown. Mirrors the ADJACENT_ANCHOR branch.
+				var renumbered = RenumberCluster(
+					entries,
+					getDetail: e => e.Detail,
+					extractPosition: ExtractLeadingBracketPosition);
 				// "HTML    : " prefix so the live/review loops route this through the
 				// word-collision highlighter (WORD1 inside-blue, </tag> red, WORD2 WCAG-blue).
-				var display = entries.Select(e => $"HTML    : {e.Context}").ToList();
+				var display = renumbered.Select(r => $"HTML    : {r.Source.Context}").ToList();
 
 				groups.Add(new TriageGroup(
 					DisplayType: "WORD_COLLISION",
 					Url: url,
 					Word: "WORD_COLLISION",
 					Comment: string.Empty,
-					Excerpt: entries[0].Context,
+					Excerpt: renumbered[0].Source.Context,
 					IsTranslation: false,
 					DisplayLines: display));
 			}
@@ -814,7 +1008,8 @@ namespace Crawler
 		internal static void ReviewTriagedQualityItems(
 			string issueTrackingPath,
 			IReadOnlySet<string> liveKeys,
-			IReadOnlyList<UrlHighlightRule> urlHighlightRules)
+			IReadOnlyList<UrlHighlightRule> urlHighlightRules,
+			IReadOnlyDictionary<string, List<string>> collisionContextsByKey)
 		{
 			if (!File.Exists(issueTrackingPath))
 			{
@@ -874,6 +1069,15 @@ namespace Crawler
 				if (!string.IsNullOrEmpty(record.SourceLabel))
 				{
 					ConsoleUi.WriteField("Source", record.SourceLabel);
+				}
+
+				// D050: the language this finding was judged against — quote records only
+				// (other quality types don't persist a language). Mirrors the triage card,
+				// including the explicit "(none declared)" when the set was empty.
+				if (record.SourceLabel == "QUOTE ISSUES")
+				{
+					ConsoleUi.WriteField("Language",
+						string.IsNullOrEmpty(record.Language) ? "(none declared)" : record.Language);
 				}
 
 				ConsoleUi.WriteUrlField(record.Url, urlHighlightRules);
@@ -945,13 +1149,30 @@ namespace Crawler
 					}
 					else if (displayType == "WORD_COLLISION")
 					{
-						// Review twin of the live WORD_COLLISION branch. Like split-word,
-						// a collision is a defect whichever pass surfaces it, so it uses the
-						// one collision scheme (WORD1 inside-blue, </tag> red, WORD2 WCAG-blue)
-						// rather than a muted variant. Source is record.Excerpt (the raw html).
-						ConsoleUi.WriteInline(ctxPrefix);
-						ConsoleUi.WriteWithSplitWordHighlight(record.Excerpt, ComputeWordCollisionSpans(record.Excerpt));
-						ConsoleUi.WriteBlank();
+						// D048: render the COMPLETE collision group, fed from this run's
+						// BuildGroups accumulation (keyed by record.Key) — every occurrence
+						// on the page, not just the stored representative excerpt. Each
+						// context goes through the identical "HTML"/split-word calls live
+						// triage uses, so the block is byte-identical to triage; the amber
+						// review tell lives in the header above, not here. Falls back to the
+						// stored excerpt when no live group exists this run (e.g. a prior-run
+						// decision on a page that no longer collides).
+						if (collisionContextsByKey.TryGetValue(record.Key, out var contexts)
+							&& contexts.Count > 0)
+						{
+							foreach (var html in contexts)
+							{
+								ConsoleUi.WriteFieldInline("HTML");
+								ConsoleUi.WriteWithSplitWordHighlight(html, ComputeWordCollisionSpans(html));
+								ConsoleUi.WriteBlank();
+							}
+						}
+						else
+						{
+							ConsoleUi.WriteInline(ctxPrefix);
+							ConsoleUi.WriteWithSplitWordHighlight(record.Excerpt, ComputeWordCollisionSpans(record.Excerpt));
+							ConsoleUi.WriteBlank();
+						}
 					}
 					else if (displayType == "LIGATURE")
 					{
@@ -1085,7 +1306,7 @@ namespace Crawler
 		/// token. Pure (no Console), so the matcher is unit-tested directly.
 		///
 		/// "Essentially empty" deliberately mirrors the detector's verdict in
-		/// ContentQuality.CheckMisplacedAnchors (which flags an anchor when
+		/// MisplacedAnchors.Check (which flags an anchor when
 		/// InnerText.Trim() is blank and it wraps no &lt;img&gt;): the marker must
 		/// appear on exactly the anchors the detector flagged, no more, no less.
 		/// Because we work on the raw excerpt string (not a parsed DOM — re-parsing
@@ -1424,7 +1645,7 @@ namespace Crawler
 		/// link. Mirrors the detector's InnerText.Trim()-is-blank verdict on a raw
 		/// string: strip all tags, decode nothing (entities are not whitespace),
 		/// and trim. An inner &lt;img&gt; counts as content (intentional image link),
-		/// matching CheckMisplacedAnchors' &lt;img&gt; exclusion.
+		/// matching MisplacedAnchors.Check's &lt;img&gt; exclusion.
 		/// </summary>
 		private static bool IsEssentiallyEmptyAnchorInner(string inner)
 		{

@@ -1,4 +1,5 @@
 using System;
+using Crawler.Lexicon;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -143,7 +144,7 @@ namespace Crawler.Tests
 
 		private static JsFileScanner.Result RunEarly(
 			string root, IReadOnlyList<string> dictionaries,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles)
+			IReadOnlyDictionary<string, Bundle> bundles)
 			=> JsFileScanner.Run(
 				root,
 				Path.Combine(root, "30.log"),
@@ -166,7 +167,7 @@ namespace Crawler.Tests
 			Directory.CreateDirectory(root);
 			try
 			{
-				var r = RunEarly(root, new List<string>(), new Dictionary<string, DictionaryBundle>());
+				var r = RunEarly(root, new List<string>(), new Dictionary<string, Bundle>());
 
 				Assert.Equal(0, r.Files);
 				Assert.Equal(0, r.Findings);
@@ -190,7 +191,7 @@ namespace Crawler.Tests
 			try
 			{
 				// Named but absent from the bundle map → no-op early return.
-				var r = RunEarly(root, new List<string> { "en" }, new Dictionary<string, DictionaryBundle>());
+				var r = RunEarly(root, new List<string> { "en" }, new Dictionary<string, Bundle>());
 
 				Assert.Equal(0, r.Files);
 				Assert.Equal(0, r.Findings);

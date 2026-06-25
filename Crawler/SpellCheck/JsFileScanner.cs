@@ -1,4 +1,5 @@
 using System;
+using Crawler.Lexicon;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -94,13 +95,13 @@ namespace Crawler.SpellCheck
 			int reachThreshold,
 			Func<string, string> fileToUrl,
 			IReadOnlyList<string> dictionaries,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles,
+			IReadOnlyDictionary<string, Bundle> bundles,
 			IReadOnlyList<string> prefixesToStrip,
 			IReadOnlyList<string> fugenelemente,
 			IReadOnlyList<string> tokensToFilter)
 		{
-			using var outw = new StreamWriter(findingsPath, append: false, new UTF8Encoding(false));
-			using var trimw = new StreamWriter(trimmedFindingsPath, append: false, new UTF8Encoding(false));
+			using var outw = new StreamWriter(findingsPath, append: false, IssueLogWriter.Utf8WithBom);
+			using var trimw = new StreamWriter(trimmedFindingsPath, append: false, IssueLogWriter.Utf8WithBom);
 
 			outw.WriteLine("# 30 — JS file spell-check (ScanScriptFilesInDownload) · FULL / debug");
 			trimw.WriteLine("# 31 — JS file spell-check (ScanScriptFilesInDownload) · TRIMMED / triage");
@@ -138,8 +139,8 @@ namespace Crawler.SpellCheck
 
 			var files = EnumerateJsFiles(downloadDirectory);
 
-			var bundlesConcrete = bundles as Dictionary<string, DictionaryBundle>
-				?? new Dictionary<string, DictionaryBundle>(bundles, StringComparer.OrdinalIgnoreCase);
+			var bundlesConcrete = bundles as Dictionary<string, Bundle>
+				?? new Dictionary<string, Bundle>(bundles, StringComparer.OrdinalIgnoreCase);
 			var checker = new ToolsSpellChecker(bundlesConcrete[dictionaries[0]], bundlesConcrete, prefixesToStrip, fugenelemente);
 			var node = HtmlNode.CreateNode("<script></script>");
 
@@ -271,7 +272,7 @@ namespace Crawler.SpellCheck
 			var ordered = words.ToList();
 			ordered.Sort(StringComparer.Create(System.Globalization.CultureInfo.InvariantCulture, ignoreCase: true));
 
-			using var w = new StreamWriter(path, append: false, new UTF8Encoding(false));
+			using var w = new StreamWriter(path, append: false, IssueLogWriter.Utf8WithBom);
 			w.WriteLine("# 32 — JS file spell-check (ScanScriptFilesInDownload) · UNIQUE tokens");
 			w.WriteLine($"# Flat, sorted, de-duplicated list of every distinct kept-finding word ({ordered.Count}). One per line, no context.");
 			w.WriteLine();
@@ -314,7 +315,7 @@ namespace Crawler.SpellCheck
 				return;
 			}
 
-			using var w = new StreamWriter(path, append: false, new UTF8Encoding(false));
+			using var w = new StreamWriter(path, append: false, IssueLogWriter.Utf8WithBom);
 			w.WriteLine("# 33 — JS file spell-check (ScanScriptFilesInDownload) · routing PREVIEW");
 			w.WriteLine($"# Reverse index built from {pagesIndexed} page(s); {pagesUnresolved} page(s) could not be resolved to a URL.");
 			w.WriteLine($"# reach ≤ {reachThreshold} → CLEAR (per-page findings); reach > {reachThreshold} → BULK (one per-bundle finding).");

@@ -1,5 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using Crawler.Logging;
+using Crawler.Lexicon;
+using Crawler.Html;
+using Crawler.Urls;
 
 namespace Crawler
 {
@@ -37,7 +41,7 @@ namespace Crawler
 		// its helpers. Static because the spell-check helpers are static and
 		// these need to be reachable without threading them through every call.
 
-		private static readonly Dictionary<string, DictionaryBundle> _dictionaryBundles =
+		private static readonly Dictionary<string, Bundle> _dictionaryBundles =
 			new(StringComparer.OrdinalIgnoreCase);
 		private static List<string> _spellCheckExcludedUrls = [];
 		private static readonly object _fileLock = new();
@@ -183,7 +187,7 @@ namespace Crawler
 			ConsoleUi.MarkStep();
 			using (Logger.QuietConsole())
 			{
-				UrlCache.LoadCache(ctx.CrawlerLogIndexPath);
+				Cache.Load(ctx.CrawlerLogIndexPath);
 			}
 		}
 
@@ -215,9 +219,9 @@ namespace Crawler
 				var listAllPagesHtml = list404
 					.Select(item => item.Trim().Replace(url, string.Empty))
 					.ToList();
-				var listPagesContaining404Link = Tools.SearchStringsInHtml(
+				var listPagesContaining404Link = HtmlSearch.FindFilesContaining(
 					listAllPagesHtml, ctx.FileDownloadDirectory, config.FilePattern);
-				Tools.Log404Sources(listPagesContaining404Link, ctx.ErrorSourcesLogPath);
+				ErrorSourcesLog.Write(listPagesContaining404Link, ctx.ErrorSourcesCsvBasePath);
 			}
 			else
 			{
@@ -241,7 +245,7 @@ namespace Crawler
 			}
 			else
 			{
-				Logger.LogInfo("Skipping SEO extraction (debug session, 08-seo-data.log exists).");
+				Logger.LogInfo("Skipping SEO extraction (debug session, 08-seo-data.csv exists).");
 				ConsoleUi.WriteStepRow("SEO data", "skipped (cached)", dimmed: true);
 			}
 		}
@@ -266,7 +270,7 @@ namespace Crawler
 			var canonicalIssues = CanonicalAnalyzer.Analyse(
 				ctx.FileDownloadDirectory,
 				ctx.CrawlerLogIndexPath,
-				ctx.CanonicalLogPath,
+				ctx.CanonicalCsvBasePath,
 				config.Url,
 				config.UrlSubdomainsAllowed,
 				config.FilePattern);
@@ -288,7 +292,7 @@ namespace Crawler
 			// issue types together, preventing premature "fixed" status from the main
 			// Merge not finding PDFQUALITY issues in its detectedIssues list.
 			var pdfIssues = PdfQualityAnalyzer.Analyse(
-				ctx.FileDownloadDirectory, ctx.PdfQualityLogPath, ctx.PdfRemediationLogPath);
+				ctx.FileDownloadDirectory, ctx.PdfQualityCsvBasePath, ctx.PdfRemediationCsvBasePath);
 			Logger.LogInfo($"PDF quality analysis complete: {pdfIssues.Count} issue(s) found.");
 			ConsoleUi.WriteStepRow("PDF quality", $"{pdfIssues.Count} issue(s)");
 			return pdfIssues;
@@ -311,7 +315,7 @@ namespace Crawler
 			}
 			Logger.LogInfo("Running asset quality analysis.");
 			var assetIssues = AssetQuality.Analyse(
-				ctx.FileDownloadDirectory, ctx.AssetQualityLogPath, config.AssetQuality);
+				ctx.FileDownloadDirectory, ctx.AssetQualityCsvBasePath, config.AssetQuality);
 			Logger.LogInfo($"Asset quality analysis complete: {assetIssues.Count} issue(s) found.");
 			ConsoleUi.WriteStepRow("Asset quality", $"{assetIssues.Count} finding(s)");
 			return assetIssues;
@@ -421,12 +425,12 @@ namespace Crawler
 			Logger.LogInfo("Checking for self linking pages.");
 			SelfLinkScanner.FindSelfLinks(
 				ctx.FilePrunedDirectory,
-				ctx.SelfLinkAnalysisPath,
+				ctx.SelfLinkAnalysisCsvBasePath,
 				config.QueryStringsToIgnoreForSelfLinkDetermination,
 				config.FilePattern,
 				config.ResolvedDegreeOfParallelism,
 				200);
-			ConsoleUi.WriteStepRow("Self-links", $"{CountDataLines(ctx.SelfLinkAnalysisPath)} found");
+			ConsoleUi.WriteStepRow("Self-links", $"{CountDataLines(ctx.SelfLinkAnalysisCsvBasePath + IssueLogWriter.CsvSemicolonSuffix)} found");
 		}
 
 		// ── Step 13: Content quality checks ──────────────────────────────────
@@ -449,7 +453,13 @@ namespace Crawler
 				config.FilePattern,
 				config.ContentQualityExcludedUrls,
 				config.ContentUnwantedPatterns,
-				ctx.CmsTemplateDefectsLogPath);
+				ctx.CmsTemplateDefectsCsvBasePath,
+				// D049: the quote detector resolves the declared language SET via the
+				// shared resolver. Overrides correct the mislabelled branches and declare
+				// multi-language pages; defaultLanguage is left empty (the param default)
+				// so an undeclared page yields the empty set — no system anchor, so only
+				// the structural quote checks run.
+				config.SpellCheckEngine.PageLanguageOverrides);
 		}
 
 		// ── Step 14: Content quality triage (interactive) ────────────────────
@@ -466,12 +476,16 @@ namespace Crawler
 					config.SpellCheckEngine.BoilerplateGroups);
 				var qualityTriageResults = ContentQualityTriage.Run(
 					ctx.ContentQualityLogPath,
-					"10-content-quality-issues.log",
+					LogFileNames.ContentQualityIssues,
 					ctx.IssueTrackingPath,
 					config.ContentQuality,
 					ctx.FileDownloadDirectory,
 					config.TriageUrlHighlight,
-					qualityBoilerResolver);
+					qualityBoilerResolver,
+					// D049: triage highlighting resolves language the same way the detector
+					// does, so marked glyphs match the flag. Overrides applied; defaultLanguage
+					// left empty (param default) for agnostic-on-undeclared.
+					config.SpellCheckEngine.PageLanguageOverrides);
 				if (qualityTriageResults.Count > 0)
 				{
 					// Use ApplyTriageDecisions (touches only the
@@ -530,7 +544,7 @@ namespace Crawler
 		/// <summary>
 		/// End-of-run maintenance of the user and site dictionaries. Orphans are read
 		/// from the cross-off usage recorder populated during spell-check
-		/// (<see cref="DictionaryUsageTracker"/>): any non-pinned user/site entry never
+		/// (<see cref="UsageTracker"/>): any non-pinned user/site entry never
 		/// consulted on a crawled page is an orphan. Redundant entries are computed from
 		/// the loaded bundles. Pinned ('!') entries are exempt.
 		///
@@ -585,8 +599,8 @@ namespace Crawler
 			// Snapshot the cross-off usage recorded during spell-check. Taken here, after
 			// spell + triage, so the redundancy check's own Check calls below cannot
 			// pollute it.
-			var usedUser = DictionaryUsageTracker.SnapshotUser();
-			var usedSite = DictionaryUsageTracker.SnapshotSite();
+			var usedUser = UsageTracker.SnapshotUser();
+			var usedSite = UsageTracker.SnapshotSite();
 
 			var prefixesToStrip = config.SpellCheckWordPrefixesToStrip;
 			var bundles = _dictionaryBundles.Values;
@@ -596,21 +610,21 @@ namespace Crawler
 				ConsoleUi.WriteHeader("DICTIONARIES");
 			}
 
-			DictionaryCheck.DictionaryAnalysis userAnalysis;
-			DictionaryCheck.DictionaryAnalysis siteAnalysis;
+			Audit.Analysis userAnalysis;
+			Audit.Analysis siteAnalysis;
 			using (Logger.QuietConsole())
 			{
 				var sw = System.Diagnostics.Stopwatch.StartNew();
 
 				userAnalysis = string.IsNullOrEmpty(userDictionaryPath)
-					? new DictionaryCheck.DictionaryAnalysis([], [])
-					: DictionaryCheck.AnalyseFromUsage(userDictionaryPath, usedUser, prefixesToStrip, bundles);
+					? new Audit.Analysis([], [])
+					: Audit.AnalyseFromUsage(userDictionaryPath, usedUser, prefixesToStrip, bundles);
 
 				siteAnalysis = string.IsNullOrEmpty(siteDictionaryPath)
-					? new DictionaryCheck.DictionaryAnalysis([], [])
-					: DictionaryCheck.AnalyseFromUsage(siteDictionaryPath, usedSite, prefixesToStrip, bundles);
+					? new Audit.Analysis([], [])
+					: Audit.AnalyseFromUsage(siteDictionaryPath, usedSite, prefixesToStrip, bundles);
 
-				DictionaryCheck.WriteAnalysisReport(
+				Audit.WriteAnalysisReport(
 					ctx.UserDictionaryOrphanWordsFilePath,
 					userDictionaryPath,
 					userAnalysis,
@@ -627,13 +641,13 @@ namespace Crawler
 			if (!string.IsNullOrEmpty(userDictionaryPath))
 			{
 				ConsoleUi.WriteStepRow("User dictionary",
-					$"{DictionaryCheck.CountDictionaryWords(userDictionaryPath)} words · " +
+					$"{Audit.CountDictionaryWords(userDictionaryPath)} words · " +
 					$"{userAnalysis.Orphaned.Count} orphan(s) · {userAnalysis.Redundant.Count} redundant");
 			}
 			if (!string.IsNullOrEmpty(siteDictionaryPath))
 			{
 				ConsoleUi.WriteStepRow("Site dictionary",
-					$"{DictionaryCheck.CountDictionaryWords(siteDictionaryPath)} words · " +
+					$"{Audit.CountDictionaryWords(siteDictionaryPath)} words · " +
 					$"{siteAnalysis.Orphaned.Count} orphan(s) · {siteAnalysis.Redundant.Count} redundant");
 			}
 
@@ -663,10 +677,10 @@ namespace Crawler
 		/// </summary>
 		private static void ApplyDictionaryTriage(
 			string dictionaryPath,
-			DictionaryCheck.DictionaryAnalysis analysis,
+			Audit.Analysis analysis,
 			string sortCulture)
 		{
-			var (toRemove, toPin) = DictionaryCheck.RunRemovalTriage(dictionaryPath, analysis);
+			var (toRemove, toPin) = Audit.RunRemovalTriage(dictionaryPath, analysis);
 
 			if (toRemove.Count == 0 && toPin.Count == 0)
 			{
@@ -680,15 +694,15 @@ namespace Crawler
 			{
 				if (toRemove.Count > 0)
 				{
-					DictionaryCheck.CleanDictionary(dictionaryPath, toRemove);
+					Audit.CleanDictionary(dictionaryPath, toRemove);
 				}
 
 				if (toPin.Count > 0)
 				{
-					DictionaryCheck.PinWords(dictionaryPath, toPin);
+					Audit.PinWords(dictionaryPath, toPin);
 				}
 
-				DictionaryCheck.SortDictionary(dictionaryPath, sortCulture);
+				Audit.SortDictionary(dictionaryPath, sortCulture);
 			}
 		}
 
@@ -702,9 +716,9 @@ namespace Crawler
 
 			// Cross-off dictionary maintenance: clear the usage recorder so it captures
 			// only this run's user/site consultations (and so per-site runs in one
-			// process do not leak usage between sites). DictionaryBundle.Check records
+			// process do not leak usage between sites). Bundle.Check records
 			// hits as the spell scan runs; Step_MaintainDictionaries reads them at the end.
-			DictionaryUsageTracker.Reset();
+			UsageTracker.Reset();
 
 			// The new engine owns spell findings: it reads raw bytes from the download dir and
 			// emits the ParallelStore views. Its in-memory tickets are the source of truth for
@@ -729,6 +743,27 @@ namespace Crawler
 					? new Crawler.SpellCheck.WordCollisionMatcher(ctx.ContentQualityIssues)
 					: null;
 
+				// Cross-pass dedup (always on): mute spelling's twin of an anchor-severed word that
+				// content-quality already reports as SPLIT_WORD_ANCHOR. Unconditional because the
+				// gate is intrinsically surgical — a one-letter severed tail that rejoins to a real
+				// word; see Crawler.Suppressions.AnchorSplitSpellSuppression for the full rationale.
+				var anchorSplit = new Crawler.Suppressions.AnchorSplitSpellSuppression(ctx.ContentQualityIssues);
+
+				// Cross-pass dedup (always on): mute spelling's twin of a token sitting inside a
+				// configured unwanted-pattern delimiter run (e.g. a leaked CMS placeholder). The
+				// anchors are the configured pattern strings; the gate is intrinsically surgical (a
+				// >=2-special-char delimiter and a whitespace-bounded run) — see
+				// Crawler.Suppressions.UnwantedPatternSpellSuppression for the full rationale.
+				var unwantedPattern = new Crawler.Suppressions.UnwantedPatternSpellSuppression(
+					ctx.ContentQualityIssues,
+					config.ContentUnwantedPatterns.SelectMany(p => p.Patterns));
+
+				// Cross-pass dedup (always on): mute spelling's twin of a word fractured across ADJACENT
+				// anchors — a CMS editor's consecutive-anchor defect that content-quality already reports
+				// as ADJACENT_ANCHOR. The gate is intrinsically surgical (two anchor fragments whose
+				// verbatim join is a real word); see Crawler.Suppressions.AdjacentAnchorSpellSuppression.
+				var adjacentAnchor = new Crawler.Suppressions.AdjacentAnchorSpellSuppression(ctx.ContentQualityIssues);
+
 				var newEngineTickets = Crawler.SpellCheck.NewSpellEngineRunner.Run(
 					newEngineFiles,
 					ctx.FileDownloadDirectory,
@@ -739,12 +774,15 @@ namespace Crawler
 					ctx.SpellSuppressionSuggestionsLogPath,
 					config.SpellCheckEngine,
 					_dictionaryBundles,
-					(_, doc) => HtmlLanguage.GetLanguageFromMeta(doc, config.SpellCheckEngine.DefaultLanguage),
+					(_, doc) => Language.FromMeta(doc, config.SpellCheckEngine.DefaultLanguage),
 					config.SpellCheckWordPrefixesToStrip,
 					config.GermanFugenelemente,
 					CrawlIndex.LookUpUrlForFile,
 					config.ResolvedDegreeOfParallelism,
-					wordCollisions);
+					wordCollisions,
+					anchorSplit,
+					unwantedPattern,
+					adjacentAnchor);
 
 				// Hand this run's tickets to the spell triage step (in-process source of truth for
 				// per-page occurrences). Set only on success — if the harvest threw, this stays
@@ -860,7 +898,8 @@ namespace Crawler
 				config.TriageUrlHighlight,
 				ctx.LastSpellTickets,
 				config.TriageLocalisationComment,
-				ctx.FileDownloadDirectory);
+				ctx.FileDownloadDirectory,
+				config.CrawlHistoryDiagnostic.HeaderExtractors);
 		}
 
 		// ── Step 25: Ticket draft / text generation ──────────────────────────
@@ -883,10 +922,20 @@ namespace Crawler
 					.ToList();
 				var metadataLookup = SpellMetadataLookup.BuildMetadataLookup(config, CrawlerContext.Silent);
 
+				// D048: per-page tickets must name every WORD_COLLISION on a page, not
+				// just the first stored excerpt. Re-accumulate this run's groups from
+				// log 10 and key the full occurrence list by IssueRecord.Key, so a
+				// ticketed collision row expands to one "Context:" line per occurrence.
+				// Same log-10 source review and triage use; no re-derivation.
+				var collisionContextsByKey = ContentQualityTriage.WordCollisionContextsByKey(
+					ctx.ContentQualityLogPath, LogFileNames.ContentQualityIssues,
+					config.ContentQuality, ctx.FileDownloadDirectory);
+
 				Logger.LogInfo("Generating ticket text.");
 				TicketRenderer.WriteTicketText(ctx.TicketTextPath, spellingRows,
 					config.TicketGeneration, config.CmsContentList, metadataLookup,
-					ctx.ErrorSourcesLogPath, config.UrlSubdomainsAllowed, qualityRows);
+					ctx.ErrorSourcesCsvBasePath, config.UrlSubdomainsAllowed, qualityRows,
+					collisionContextsByKey);
 				ConsoleUi.WriteStepRow("Ticket text",
 					$"{spellingRows.Count + qualityRows.Count} row(s)");
 			}
@@ -958,7 +1007,7 @@ namespace Crawler
 					continue;
 				}
 
-				_dictionaryBundles[bundle.LanguageCode] = Tools.LoadDictionary(
+				_dictionaryBundles[bundle.LanguageCode] = Loader.Load(
 					bundle.DicFile,
 					bundle.AffFile,
 					customDictionaryPath,

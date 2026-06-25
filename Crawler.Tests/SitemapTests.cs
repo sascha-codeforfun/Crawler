@@ -1,13 +1,14 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
 	/// <summary>
 	/// Tests for Sitemap.GenerateSitemap — particularly the safeguard that
 	/// prevents pages sourced from the CMS list pass from entering the sitemap.
-	/// Uses real temp files and UrlCache.LoadCache to exercise the full path.
-	/// Placed in the Logger collection because UrlCache is static shared state.
+	/// Uses real temp files and Cache.Load to exercise the full path.
+	/// Placed in the Logger collection because Cache is static shared state.
 	/// </summary>
 	[Collection("Logger")]
 	public class SitemapTests : IDisposable
@@ -55,7 +56,7 @@ namespace Crawler.Tests
 			}
 
 			File.WriteAllLines(indexPath, lines, Encoding.UTF8);
-			UrlCache.LoadCache(indexPath);
+			Cache.Load(indexPath);
 		}
 
 		// ── Safeguard: list pages must never enter sitemap ────────────────────────

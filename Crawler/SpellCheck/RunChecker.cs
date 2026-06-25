@@ -52,7 +52,7 @@ namespace Crawler.SpellCheck
 	/// ToolsSpellChecker) — the new module does NOT reimplement that subtle, oracle-critical
 	/// logic. It is a delegate so the finding-assembly spine can be tested in isolation with a
 	/// fake, and so the new module is not coupled to where the checker currently lives (it
-	/// moves cleanly when Tools.cs is finally dissolved).
+	/// moved cleanly when Tools.cs was dissolved).
 	///
 	/// Contract: given the run's canonical text and its language, return the set of words that
 	/// fail the check. The text is whole-run (not per-token) so source-context-sensitive rules
@@ -101,12 +101,12 @@ namespace Crawler.SpellCheck
 		}
 
 		/// <summary>Single-language convenience overload — delegates to the union version.</summary>
-		public static IEnumerable<SpellFinding> Check(TextRun run, string language, RunCheck check, KnownDefectMatcher? knownDefects = null, bool heuristicNonProseDataAttributeSuppression = false, IReadOnlySet<string>? collisionWords = null, IReadOnlySet<string>? scriptTokensToFilter = null, string? scriptFallbackLanguage = null, bool scriptProseRatioGate = false, double scriptProseRatioTau = 0.0, ScriptGateInfo? scriptGateInfo = null)
+		public static IEnumerable<SpellFinding> Check(TextRun run, string language, RunCheck check, KnownDefectMatcher? knownDefects = null, bool heuristicNonProseDataAttributeSuppression = false, IReadOnlySet<string>? collisionWords = null, IReadOnlySet<string>? scriptTokensToFilter = null, string? scriptFallbackLanguage = null, bool scriptProseRatioGate = false, double scriptProseRatioTau = 0.0, ScriptGateInfo? scriptGateInfo = null, IReadOnlyDictionary<string, IReadOnlySet<string>>? anchorSplitTails = null, IReadOnlySet<string>? unwantedPatternWords = null, IReadOnlyDictionary<string, IReadOnlySet<string>>? adjacentAnchorJoins = null)
 		{
-			return Check(run, new[] { language }, check, knownDefects, heuristicNonProseDataAttributeSuppression, collisionWords, scriptTokensToFilter, scriptFallbackLanguage, scriptProseRatioGate, scriptProseRatioTau, scriptGateInfo);
+			return Check(run, new[] { language }, check, knownDefects, heuristicNonProseDataAttributeSuppression, collisionWords, scriptTokensToFilter, scriptFallbackLanguage, scriptProseRatioGate, scriptProseRatioTau, scriptGateInfo, anchorSplitTails, unwantedPatternWords, adjacentAnchorJoins);
 		}
 
-		public static IEnumerable<SpellFinding> Check(TextRun run, IReadOnlyList<string> languages, RunCheck check, KnownDefectMatcher? knownDefects = null, bool heuristicNonProseDataAttributeSuppression = false, IReadOnlySet<string>? collisionWords = null, IReadOnlySet<string>? scriptTokensToFilter = null, string? scriptFallbackLanguage = null, bool scriptProseRatioGate = false, double scriptProseRatioTau = 0.0, ScriptGateInfo? scriptGateInfo = null)
+		public static IEnumerable<SpellFinding> Check(TextRun run, IReadOnlyList<string> languages, RunCheck check, KnownDefectMatcher? knownDefects = null, bool heuristicNonProseDataAttributeSuppression = false, IReadOnlySet<string>? collisionWords = null, IReadOnlySet<string>? scriptTokensToFilter = null, string? scriptFallbackLanguage = null, bool scriptProseRatioGate = false, double scriptProseRatioTau = 0.0, ScriptGateInfo? scriptGateInfo = null, IReadOnlyDictionary<string, IReadOnlySet<string>>? anchorSplitTails = null, IReadOnlySet<string>? unwantedPatternWords = null, IReadOnlyDictionary<string, IReadOnlySet<string>>? adjacentAnchorJoins = null)
 		{
 			// Whole-value gate for attribute/meta runs: a value must look like prose to be checked.
 			// This is what keeps URLs, paths, JSON, digit/hex runs and high-entropy tokens (session
@@ -127,6 +127,16 @@ namespace Crawler.SpellCheck
 				if (run.Source == RunSource.Script)
 				{
 					if (!ValueClassifier.ClassifyScriptLiteral(run.RawText, scriptTokensToFilter).ShouldCheck)
+					{
+						yield break;
+					}
+
+					// Identifier-lookup guard (both script paths): if this literal is the quoted
+					// argument to a DOM identifier lookup (getElementById, …), it is an element
+					// id / name / class reference, never prose — drop the whole literal. Shape
+					// cannot catch a lowercase wordish id; only the surrounding call signature can.
+					// See IsIdentifierLookupArgument.
+					if (IsIdentifierLookupArgument(run.RawText, run.ScriptContext))
 					{
 						yield break;
 					}
@@ -366,6 +376,48 @@ namespace Crawler.SpellCheck
 						continue;
 					}
 
+					// Cross-pass dedup (content-quality → spelling): an anchor-severed word. If CQ
+					// reports a SPLIT_WORD_ANCHOR whose HEAD is this token and whose single severed
+					// tail letter rejoins to a real word in the page's language, the spelling "miss"
+					// is only the markup wound CQ already owns — mute it so the defect is reported
+					// once (by CQ). The tail map is per-file and pre-filtered to the one-letter gate;
+					// the rejoin is checked here so it uses the same dictionary the word would
+					// normally get. See Crawler.Suppressions.AnchorSplitSpellSuppression for the full
+					// rationale, including why the tail is capped at one letter.
+					if (anchorSplitTails != null
+						&& anchorSplitTails.TryGetValue(token.Text, out var severedTails)
+						&& DictionaryAcceptsAnyRejoin(token.Text, severedTails, languages, check))
+					{
+						continue;
+					}
+
+					// Cross-pass dedup (content-quality → spelling): a word fractured across ADJACENT
+					// anchors — a CMS editor's consecutive-anchor defect, "<a>And</a><a></a><a>roid</a>".
+					// CQ reports the page as ADJACENT_ANCHOR; the traverser ended a segment at each <a>,
+					// so each fragment ("And", "roid") landed in its own run and surfaces as a stray miss.
+					// The per-file map carries, for each fragment, the verbatim source-order join of its
+					// fracture (textA+textB); mute the fragment when that join is a real word in the page's
+					// language, so the defect is reported once (by CQ). A bad+bad join is never a word, so
+					// a mispaired fracture cannot mute. See Crawler.Suppressions.AdjacentAnchorSpellSuppression.
+					if (adjacentAnchorJoins != null
+						&& adjacentAnchorJoins.TryGetValue(token.Text, out var anchorJoins)
+						&& DictionaryAcceptsAny(anchorJoins, languages, check))
+					{
+						continue;
+					}
+
+					// Cross-pass dedup (content-quality → spelling): a token sitting inside a
+					// configured unwanted-pattern delimiter run (e.g. the innards of a leaked CMS
+					// placeholder) is junk CQ already reports as UNWANTED_PATTERN — mute it so the
+					// defect is reported once (by CQ). The set holds only tokens lifted from inside a
+					// qualified delimiter's whitespace-bounded run, so a genuine word is never in it.
+					// No dictionary check: it is junk by construction, not prose. See
+					// Crawler.Suppressions.UnwantedPatternSpellSuppression for the full rationale.
+					if (unwantedPatternWords != null && unwantedPatternWords.Contains(token.Text))
+					{
+						continue;
+					}
+
 					// German Ergänzungsstrich (suspended compound): a lowercase tail like the "-lampe"
 					// in "Straßenlaterne/-lampe" tokenizes to a bare "lampe" with the shared head
 					// elided, so it fails the dictionary on case alone. When the page is German and the
@@ -380,6 +432,67 @@ namespace Crawler.SpellCheck
 						&& char.IsLower(token.Text[0])
 						&& IsErgaenzungsstrichTail(canonical, token.Start)
 						&& GermanAcceptsCapitalized(token.Text, languages, check))
+					{
+						continue;
+					}
+
+					// German Ergänzungsstrich (suspended HEAD): the mirror of the tail rescue above. A
+					// truncated compound head like "Investitions-" or "Schul-" carries a trailing
+					// Ergänzungsstrich and borrows its tail from a COORDINATED sibling compound —
+					// "Investitions- oder Avalkredit" (= Investitionskredit), "Schul- / Studienreise"
+					// (= Schulreise). The head is a real German word only once rejoined, so standing alone
+					// it fails the dictionary. When run-splitting has fractured the head into its own run
+					// (each conjunct in its own <a>, the slash/coordinator in the text node between them),
+					// the sibling is not in THIS run's canonical text — but it IS in the block the run
+					// belongs to. So the sibling is recovered from the block text (run.Node), the shared
+					// tail is borrowed from it (a suffix of >= 4 letters), and the occurrence is dropped iff
+					// head+tail rejoins to a real German word. Additive and per-occurrence: it only ever
+					// removes a finding, and only when BOTH a suspension marker (- followed by / und oder
+					// bzw. sowie) is present AND some borrowed-tail rejoin passes the dictionary — so a head
+					// typo and a markerless non-word still surface. The dictionary is the sole arbiter;
+					// broken markup (control chars, missing space, wrong tail) simply fails the rejoin and
+					// stays flagged. The germanInSet/IsUpper gates keep this off non-German pages and off
+					// the lowercase-tail case the rescue above already owns.
+					if (germanInSet
+						&& token.Text.Length > 0
+						&& char.IsUpper(token.Text[0])
+						&& run.Node != null
+						&& TryBorrowSuspendedHeadTail(run.Node, token.Text, languages, check))
+					{
+						continue;
+					}
+
+					// German reduced indefinite article ('nem = einem, 'ne = eine, 'nen = einen,
+					// 'ner = einer, 'nes = eines). The tokenizer drops a leading elision apostrophe
+					// ("mit 'nem" → bare "nem"), and the stem is not a dictionary word, so it flags. When
+					// the page is German, the token is one of the reduced-article stems, AND a proclitic
+					// apostrophe immediately precedes it at a left boundary, it is a colloquial elision, not
+					// a typo — drop it. No dictionary call: these stems are never words, so the apostrophe-
+					// in-context IS the signal. Additive and per-occurrence: a bare "nem"/"ne" with no
+					// leading apostrophe still flags, so a real typo that spells a stem is never masked.
+					// Limited to the reduced indefinite articles — the only closed, unambiguously-safe
+					// clitic family (the single-letter clitics 'n/'m/'r, the enclitic 's that stays inside
+					// its token in "geht's", and the apostrophe-less du-clitics "haste"/"biste" are all out
+					// of scope and would each need their own mechanism).
+					if (germanInSet
+						&& GermanReducedArticleClitics.Contains(token.Text)
+						&& IsProcliticApostrophe(canonical, token.Start))
+					{
+						continue;
+					}
+
+					// German parenthesised optional suffix ("Nachhaltigkeit(smanagement)" reads as both
+					// "Nachhaltigkeit" and "Nachhaltigkeitsmanagement"). The tokenizer splits the
+					// parentheses off, so the in-paren fragment ("smanagement", Fugen-s included) is checked
+					// alone and fails as a non-word, while the base ("Nachhaltigkeit") is its own token and
+					// validated normally. When the page is German, the flagged token sits inside parentheses
+					// "(token)" with a base word immediately before the "(", and base+token rejoins to a real
+					// word, drop the fragment. The dictionary is the sole arbiter: a junk fragment
+					// ("Haus(blah)" → "Hausblah") still flags. This is the suffix-after-base mirror of
+					// SpellChecker.TryParenthesizedPrefixJoin (which handles "(prefix-)stem"); the infix form
+					// "Kund(inn)en" is deliberately out of scope (multiple fragments, two readings).
+					if (germanInSet
+						&& TryParenthesizedSuffixJoin(canonical, token.Start, token.Length, token.Text, languages, check))
 					{
 						continue;
 					}
@@ -533,6 +646,81 @@ namespace Crawler.SpellCheck
 			return hasHyphen;
 		}
 
+		// [KEEP] Identifier-lookup call signatures: the text that must IMMEDIATELY precede a quoted
+		// string literal for that literal to be treated as a DOM identifier reference (id / name /
+		// class), not prose, and therefore dropped from spell-checking. This list looks like it
+		// could grow freely — it must NOT. Every entry has been vetted against ALL of:
+		//   1. it is a CALL signature ("name(" or "chain.method("), never a property key ("key:");
+		//   2. the callee's contract makes the argument a SINGLE id / name / class identifier;
+		//   3. the argument CANNOT embed a prose expression — this is what excludes the selector
+		//      family (querySelector / querySelectorAll / closest / matches): a CSS selector can
+		//      carry an attribute match like [title="Bitte warten"], i.e. real prose inside the
+		//      string. Selector APIs must never be added here;
+		//   4. the signature carries its own ANCHOR (the "classList."/"className."/"getElementsBy…"
+		//      prefix), so it cannot collide with an unrelated same-named method — bare "contains("
+		//      would match node.contains(node); bare "indexOf(" would match bodyText.indexOf("…prose…").
+		// Adding an entry that fails any of these re-opens prose suppression. Object-property keys
+		// whose VALUE is a fixed non-word (e.g. an ajax dataType of "json") do not belong here —
+		// they go to SpellCheckJavaScript.TokensToFilter, where an exact non-word token is safe.
+		private static readonly string[] IdentifierLookupSignatures =
+		{
+			"getElementById(",
+			"getElementsByName(",
+			"getElementsByClassName(",
+			"classList.contains(",
+			"className.indexOf(",
+		};
+
+		// True when <paramref name="literal"/> appears in <paramref name="scriptContext"/> as the
+		// quoted argument immediately following one of the vetted identifier-lookup signatures
+		// (quote-agnostic, tolerant of collapsed whitespace after '('). Anchored to THIS literal:
+		// the signature must be followed by a quote, then exactly this literal, then the matching
+		// quote — so a window holding several lookups never mis-attributes one literal's verdict to
+		// another. Used by the Script branch to drop DOM id/name/class references shape cannot catch.
+		private static bool IsIdentifierLookupArgument(string literal, string? scriptContext)
+		{
+			if (string.IsNullOrEmpty(literal) || string.IsNullOrEmpty(scriptContext))
+			{
+				return false;
+			}
+
+			foreach (var signature in IdentifierLookupSignatures)
+			{
+				int from = 0;
+				while (true)
+				{
+					int at = scriptContext.IndexOf(signature, from, StringComparison.Ordinal);
+					if (at < 0)
+					{
+						break;
+					}
+
+					int i = at + signature.Length;
+					while (i < scriptContext.Length && char.IsWhiteSpace(scriptContext[i]))
+					{
+						i++;
+					}
+
+					if (i < scriptContext.Length && (scriptContext[i] == '"' || scriptContext[i] == '\''))
+					{
+						char quote = scriptContext[i];
+						int litStart = i + 1;
+						int litEnd = litStart + literal.Length;
+						if (litEnd < scriptContext.Length
+							&& string.CompareOrdinal(scriptContext, litStart, literal, 0, literal.Length) == 0
+							&& scriptContext[litEnd] == quote)
+						{
+							return true;
+						}
+					}
+
+					from = at + signature.Length;
+				}
+			}
+
+			return false;
+		}
+
 		// True when the token carries at least one letter — i.e. it is a WORD token rather than one
 		// of the tokenizer's standalone punctuation tokens. Unicode-aware so accented letters count.
 		private static bool HasLetter(string s)
@@ -627,6 +815,79 @@ namespace Crawler.SpellCheck
 			return k >= 0 && text[k] == ','; // X, -tail
 		}
 
+		// German reduced indefinite articles (proclitic ein- elisions): "'ne" (eine), "'nem" (einem),
+		// "'nen" (einen), "'ner" (einer), "'nes" (eines). The tokenizer drops the leading elision
+		// apostrophe, leaving these bare non-word stems that fail the dictionary. Deliberately ONLY the
+		// reduced articles — NOT the single-letter clitics ("'n"/"'m"/"'r"; a lone apostrophe+letter is
+		// more often a stray quote than a clitic), NOT the enclitic "'s" ("geht's" keeps the apostrophe
+		// INSIDE the token so the stem never appears bare), and NOT the apostrophe-less du-clitics
+		// ("haste"/"biste"). Tested case-insensitively so a sentence-initial "'Ne …" is covered.
+		//
+		// Intentionally SEPARATE from the config-driven per-language elision profiles in
+		// Crawler.Quality.Quotes (ContentQualityApostropheElisions): those serve quote balancing
+		// (elision vs. quote-opener) and may be broad — including real words ("'mal" → "mal") is
+		// harmless there. Here the contract is the opposite: a suppression must never hide a typo, so the
+		// set is a closed, hardcoded, spell-safe subset, never widened by config.
+		private static readonly IReadOnlySet<string> GermanReducedArticleClitics =
+			new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+			{
+				"ne", "nem", "nen", "ner", "nes",
+			};
+
+		// True when the token at <paramref name="start"/> is immediately preceded by a PROCLITIC elision
+		// apostrophe: an apostrophe at a left boundary (start-of-string, whitespace, or any non-letter),
+		// as in "mit 'nem" → token "nem" with the leading "'" dropped by the tokenizer. An INTERNAL
+		// apostrophe ("geht's", between two letters) is not proclitic — the tokenizer keeps it inside the
+		// token there, so this never matches. Curly apostrophes are already folded to "'" upstream.
+		private static bool IsProcliticApostrophe(string text, int start)
+		{
+			if (start < 1 || text[start - 1] != '\'')
+			{
+				return false;
+			}
+
+			// The char before the apostrophe must be a left boundary: start-of-string, or a non-letter
+			// (space, punctuation, quote). A letter there ("x'nem") is not a real proclitic.
+			return start - 2 < 0 || !char.IsLetter(text[start - 2]);
+		}
+
+		// German parenthesised optional suffix: the token at <paramref name="start"/> sits wholly inside
+		// "(token)" — "(" immediately before, ")" immediately after — with a base word of letters ending
+		// at the "(". Accepts when base+token rejoins to a real word ("Nachhaltigkeit(smanagement)" →
+		// "Nachhaltigkeitsmanagement"), reusing the same dictionary the word would normally get. The
+		// suffix-after-base mirror of SpellChecker.TryParenthesizedPrefixJoin ("(prefix-)stem"). The base
+		// is its own token and validated separately; this only rescues the in-paren fragment.
+		private static bool TryParenthesizedSuffixJoin(string text, int start, int length, string token, IReadOnlyList<string> languages, RunCheck check)
+		{
+			if (start < 1 || text[start - 1] != '(')
+			{
+				return false;
+			}
+
+			int afterToken = start + length;
+			if (afterToken >= text.Length || text[afterToken] != ')')
+			{
+				return false;
+			}
+
+			// Base: the maximal run of letters ending immediately before the "(".
+			int baseEnd = start - 1; // index of "("
+			int baseStart = baseEnd;
+			while (baseStart > 0 && char.IsLetter(text[baseStart - 1]))
+			{
+				baseStart--;
+			}
+
+			if (baseStart >= baseEnd)
+			{
+				return false; // no base word before the "("
+			}
+
+			var baseWord = text[baseStart..baseEnd];
+			return DictionaryAcceptsAnyRejoin(
+				baseWord, new HashSet<string>(StringComparer.Ordinal) { token }, languages, check);
+		}
+
 		// Re-checks the CAPITALIZED form of an elided lowercase tail against the page's German
 		// language(s) only. Returns true if any German dictionary accepts it (i.e. the lowercase flag
 		// was a false positive from a suspended compound). Capitalises the first letter only, which is
@@ -652,6 +913,162 @@ namespace Crawler.SpellCheck
 				if (!missedHere)
 				{
 					return true; // a German dictionary accepts the capitalized noun
+				}
+			}
+
+			return false;
+		}
+
+		// True if some page language's dictionary accepts head+tail for ANY of the severed tails.
+		// Mirrors GermanAcceptsCapitalized: runs the injected checker on the rejoined variant and
+		// treats "not a miss" as accepted, so it is the exact check the word would normally get.
+		// Used to mute an anchor-severed head whose reunified word is real (see the anchor-split
+		// guard above and Crawler.Suppressions.AnchorSplitSpellSuppression).
+		private static bool DictionaryAcceptsAnyRejoin(string head, IReadOnlySet<string> tails, IReadOnlyList<string> languages, RunCheck check)
+		{
+			if (string.IsNullOrEmpty(head) || tails == null)
+			{
+				return false;
+			}
+
+			foreach (var tail in tails)
+			{
+				if (string.IsNullOrEmpty(tail))
+				{
+					continue;
+				}
+
+				string rejoined = head + tail;
+				foreach (var language in languages)
+				{
+					if (language == null)
+					{
+						continue;
+					}
+
+					var misses = check(rejoined, language);
+					bool missedHere = misses != null
+						&& misses.Any(m => string.Equals(m.Word, rejoined, StringComparison.Ordinal));
+					if (!missedHere)
+					{
+						return true; // some language's dictionary accepts the reunified word
+					}
+				}
+			}
+
+			return false;
+		}
+
+		// True if some page language's dictionary accepts ANY of the candidate words as-is. Same
+		// "run the injected checker, treat 'not a miss' as accepted" contract as
+		// DictionaryAcceptsAnyRejoin, but the candidates are already whole words (no head to prepend) —
+		// used to mute a fragment of an ADJACENT_ANCHOR fracture whose reunified word is real (see the
+		// adjacent-anchor guard above and Crawler.Suppressions.AdjacentAnchorSpellSuppression).
+		private static bool DictionaryAcceptsAny(IReadOnlySet<string> words, IReadOnlyList<string> languages, RunCheck check)
+		{
+			if (words == null)
+			{
+				return false;
+			}
+
+			foreach (var word in words)
+			{
+				if (string.IsNullOrEmpty(word))
+				{
+					continue;
+				}
+
+				foreach (var language in languages)
+				{
+					if (language == null)
+					{
+						continue;
+					}
+
+					var misses = check(word, language);
+					bool missedHere = misses != null
+						&& misses.Any(m => string.Equals(m.Word, word, StringComparison.Ordinal));
+					if (!missedHere)
+					{
+						return true; // some language's dictionary accepts the reunified word
+					}
+				}
+			}
+
+			return false;
+		}
+		// (the maximal letter run before the trailing Ergänzungsstrich), group 2 the sibling's leading
+		// letter run. The left lookbehind keeps the head at a word boundary so "Hochschul-" is not read
+		// as "Schul-". The connector alternation carries its own trailing separator ('/' tolerates none,
+		// the words require whitespace) so "und"/"oder" cannot match inside a longer word.
+		private static readonly Regex SuspendedHeadPattern =
+			new(@"(?<!\p{L})(\p{L}+)-\s*(?:/\s*|(?:und|oder|bzw\.|sowie)\s+)(\p{L}+)",
+				RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+		// Shortest shared tail we will borrow from the sibling compound. Below 4, a coincidental short
+		// suffix can rejoin to an unintended real word; at >= 4 the borrowed tail is a meaningful
+		// compound part ("reise", "kredit"). This deliberately declines to rescue 3-letter shared tails
+		// ("-weg", "-bau", "-hof"); raising or lowering the floor is a one-line change.
+		private const int MinBorrowedSuffixLength = 4;
+
+		// Every suffix of <paramref name="sibling"/> at least <see cref="MinBorrowedSuffixLength"/>
+		// letters long — the candidate shared tails offered to the rejoin check. The convention shares
+		// the part of the sibling AFTER its own head ("Avalkredit" → "kredit"), but the exact split is
+		// unknown, so all qualifying suffixes are tried and the dictionary picks: any rejoin to a real
+		// word means the head legitimately abbreviates that compound, which is exactly the rescue case.
+		private static IReadOnlySet<string> BorrowedTailSuffixes(string sibling)
+		{
+			var set = new HashSet<string>(StringComparer.Ordinal);
+			if (string.IsNullOrEmpty(sibling))
+			{
+				return set;
+			}
+
+			for (int start = 0; start + MinBorrowedSuffixLength <= sibling.Length; start++)
+			{
+				set.Add(sibling.Substring(start));
+			}
+
+			return set;
+		}
+
+		// Recovers the coordinated sibling compound for a suspended head from the head's BLOCK text and
+		// tests whether borrowing the sibling's tail rejoins the head to a real German word. The block
+		// text (run.Node) is canonicalized with the same rule as the run so entity/whitespace forms
+		// match, then scanned for "<head>- <connector> <sibling>". For each sibling found after THIS
+		// exact head, the borrowed-tail suffixes are offered to DictionaryAcceptsAnyRejoin; the head is
+		// rescued if any head+suffix is accepted. A cheap no-hyphen early-out keeps the common
+		// capitalized-miss-without-suspension case to a single scan.
+		private static bool TryBorrowSuspendedHeadTail(HtmlNode node, string head, IReadOnlyList<string> languages, RunCheck check)
+		{
+			if (node == null || string.IsNullOrEmpty(head))
+			{
+				return false;
+			}
+
+			string raw = node.InnerText;
+			if (string.IsNullOrEmpty(raw) || raw.IndexOf('-') < 0)
+			{
+				return false; // no hyphen anywhere in the block — no suspension is possible
+			}
+
+			string blockText = Canonicalizer.Canonicalize(raw);
+			if (blockText.Length == 0)
+			{
+				return false;
+			}
+
+			foreach (Match m in SuspendedHeadPattern.Matches(blockText))
+			{
+				if (!string.Equals(m.Groups[1].Value, head, StringComparison.Ordinal))
+				{
+					continue; // a different head's suspension — not this token
+				}
+
+				var tails = BorrowedTailSuffixes(m.Groups[2].Value);
+				if (tails.Count > 0 && DictionaryAcceptsAnyRejoin(head, tails, languages, check))
+				{
+					return true;
 				}
 			}
 

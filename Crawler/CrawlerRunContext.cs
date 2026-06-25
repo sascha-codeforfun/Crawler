@@ -75,7 +75,7 @@ namespace Crawler
 		internal string CrawlerRawLogPath { get; set; } = string.Empty;
 		internal string CrawlerLogIndexPath { get; set; } = string.Empty;
 		internal string ErrorLogPath { get; set; } = string.Empty;
-		internal string ErrorSourcesLogPath { get; set; } = string.Empty;
+		internal string ErrorSourcesCsvBasePath { get; set; } = string.Empty;
 		internal string SpellErrorLogPath { get; set; } = string.Empty;
 		internal string UniqueSpellErrorLogPath { get; set; } = string.Empty;
 		internal string SpellLocatedLogPath { get; set; } = string.Empty;
@@ -101,24 +101,24 @@ namespace Crawler
 		// Editor-class content-quality issues from this run (post-suppression), handed to the spell
 		// step so it can dedup a spell finding against a WORD_COLLISION CQ already reports. Null when
 		// content-quality did not run.
-		internal System.Collections.Generic.IReadOnlyList<ContentQuality.QualityIssue>? ContentQualityIssues { get; set; }
+		internal System.Collections.Generic.IReadOnlyList<Crawler.Quality.QualityIssue>? ContentQualityIssues { get; set; }
 		internal string FullContentLogPath { get; set; } = string.Empty;
 		internal string ContentCrawlCompareLogFile { get; set; } = string.Empty;
 		internal string SitemapPath { get; set; } = string.Empty;
 		internal string SeoDataPath { get; set; } = string.Empty;
 		internal string UserDictionaryOrphanWordsFilePath { get; set; } = string.Empty;
 		internal string RedirectAnalysisPath { get; set; } = string.Empty;
-		internal string SelfLinkAnalysisPath { get; set; } = string.Empty;
-		internal string CanonicalLogPath { get; set; } = string.Empty;
-		internal string PdfQualityLogPath { get; set; } = string.Empty;
-		internal string PdfRemediationLogPath { get; set; } = string.Empty;
-		internal string AssetQualityLogPath { get; set; } = string.Empty;
+		internal string SelfLinkAnalysisCsvBasePath { get; set; } = string.Empty;
+		internal string CanonicalCsvBasePath { get; set; } = string.Empty;
+		internal string PdfQualityCsvBasePath { get; set; } = string.Empty;
+		internal string PdfRemediationCsvBasePath { get; set; } = string.Empty;
+		internal string AssetQualityCsvBasePath { get; set; } = string.Empty;
 		internal string Base64AssetsLogPath { get; set; } = string.Empty;
 		internal string Base64AssetsDirectory { get; set; } = string.Empty;
 		internal string ResourceBloatLogPath { get; set; } = string.Empty;
 		internal string ResourceBloatBaselineLogPath { get; set; } = string.Empty;
 		internal string ContentQualityLogPath { get; set; } = string.Empty;
-		internal string CmsTemplateDefectsLogPath { get; set; } = string.Empty;
+		internal string CmsTemplateDefectsCsvBasePath { get; set; } = string.Empty;
 		internal string ContentTypeMismatchLogPath { get; set; } = string.Empty;
 		internal string PdfContentTypeMismatchLogPath { get; set; } = string.Empty;
 		internal string ImageContentTypeMismatchLogPath { get; set; } = string.Empty;
@@ -140,44 +140,44 @@ namespace Crawler
 			SaveDirectory = saveDirectory;
 			FileDownloadDirectory = Path.Combine(saveDirectory, "download");
 			FilePrunedDirectory = Path.Combine(saveDirectory, "pruned");
-			CrawlerRawLogPath = Path.Combine(saveDirectory, "00-crawler.log");
-			CrawlerLogPath = Path.Combine(saveDirectory, "01-crawler.log");
-			CrawlerLogIndexPath = Path.Combine(saveDirectory, "02-crawler-index.log");
-			RedirectAnalysisPath = Path.Combine(saveDirectory, "03-redirect-analysis.log");
-			FullContentLogPath = Path.Combine(saveDirectory, "04-full-content.log");
-			ContentCrawlCompareLogFile = Path.Combine(saveDirectory, "05-not-directly-crawlable.log");
-			ErrorLogPath = Path.Combine(saveDirectory, "06-404.log");
-			ErrorSourcesLogPath = Path.Combine(saveDirectory, "07-404-sources.log");
-			SeoDataPath = Path.Combine(saveDirectory, "08-seo-data.log");
-			SelfLinkAnalysisPath = Path.Combine(saveDirectory, "09-self-link-analysis.log");
-			ContentQualityLogPath = Path.Combine(saveDirectory, "10-content-quality-issues.log");
-			UniqueSpellErrorLogPath = Path.Combine(saveDirectory, "11-spell-errors-unique.log");
-			SpellErrorLogPath = Path.Combine(saveDirectory, "12-spell-errors-sources.log");
-			SpellLocatedLogPath = Path.Combine(saveDirectory, "13-spell-errors-source-location.log");
+			CrawlerRawLogPath = Path.Combine(saveDirectory, LogFileNames.CrawlerRaw);
+			CrawlerLogPath = Path.Combine(saveDirectory, LogFileNames.Crawler);
+			CrawlerLogIndexPath = Path.Combine(saveDirectory, LogFileNames.CrawlerIndex);
+			RedirectAnalysisPath = Path.Combine(saveDirectory, LogFileNames.RedirectAnalysis);
+			FullContentLogPath = Path.Combine(saveDirectory, LogFileNames.FullContent);
+			ContentCrawlCompareLogFile = Path.Combine(saveDirectory, LogFileNames.NotDirectlyCrawlable);
+			ErrorLogPath = Path.Combine(saveDirectory, LogFileNames.Errors404);
+			ErrorSourcesCsvBasePath = Path.Combine(saveDirectory, LogFileNames.Error404SourcesCsvBase);
+			SeoDataPath = Path.Combine(saveDirectory, LogFileNames.SeoData);
+			SelfLinkAnalysisCsvBasePath = Path.Combine(saveDirectory, LogFileNames.SelfLinkAnalysisCsvBase);
+			ContentQualityLogPath = Path.Combine(saveDirectory, LogFileNames.ContentQualityIssues);
+			UniqueSpellErrorLogPath = Path.Combine(saveDirectory, LogFileNames.SpellErrorsUnique);
+			SpellErrorLogPath = Path.Combine(saveDirectory, LogFileNames.SpellErrorsSources);
+			SpellLocatedLogPath = Path.Combine(saveDirectory, LogFileNames.SpellErrorsSourceLocation);
 			// Spell-engine verbatim diagnostic — what was flagged and where, every harvest run.
-			WordTicketsDiagnosticLogPath = Path.Combine(saveDirectory, "14-word-tickets.log");
+			WordTicketsDiagnosticLogPath = Path.Combine(saveDirectory, LogFileNames.WordTickets);
 			// Script-source suppression suggestions for SpellCheckJavaScript.TokensToFilter (supplements
 			// the JS spell-check feature). 15/16+ are taken; this takes the next free number.
-			SpellSuppressionSuggestionsLogPath = Path.Combine(saveDirectory, "27-spellcheck-suppression-suggestions.log");
-			BulkScriptBlobLogPath = Path.Combine(saveDirectory, "28-bulk-script-blob.log");
-			BulkScriptFindingsLogPath = Path.Combine(saveDirectory, "29-bulk-script-findings.log");
-			JsFilesSpellCheckLogPath = Path.Combine(saveDirectory, "30-js-files-spell-check.log");
-			JsFilesSpellCheckTrimmedLogPath = Path.Combine(saveDirectory, "31-js-files-spell-check-trimmed.log");
-			JsFilesSpellCheckUniqueLogPath = Path.Combine(saveDirectory, "32-js-files-spell-check-unique.log");
-			JsFilesSpellCheckRoutingLogPath = Path.Combine(saveDirectory, "33-js-files-spell-check-routing.log");
-			UserDictionaryOrphanWordsFilePath = Path.Combine(saveDirectory, "15-user-dictionary-orphan-words.log");
-			CanonicalLogPath = Path.Combine(saveDirectory, "16-canonical-issues.log");
-			PdfQualityLogPath = Path.Combine(saveDirectory, "17-pdf-quality.log");
-			PdfRemediationLogPath = Path.Combine(saveDirectory, "18-pdf-remediation.log");
-			AssetQualityLogPath = Path.Combine(saveDirectory, "25-asset-quality.log");
-			Base64AssetsLogPath = Path.Combine(saveDirectory, "19-base64assets.log");
+			SpellSuppressionSuggestionsLogPath = Path.Combine(saveDirectory, LogFileNames.SpellcheckSuppressionSuggestions);
+			BulkScriptBlobLogPath = Path.Combine(saveDirectory, LogFileNames.BulkScriptBlob);
+			BulkScriptFindingsLogPath = Path.Combine(saveDirectory, LogFileNames.BulkScriptFindings);
+			JsFilesSpellCheckLogPath = Path.Combine(saveDirectory, LogFileNames.JsFilesSpellCheck);
+			JsFilesSpellCheckTrimmedLogPath = Path.Combine(saveDirectory, LogFileNames.JsFilesSpellCheckTrimmed);
+			JsFilesSpellCheckUniqueLogPath = Path.Combine(saveDirectory, LogFileNames.JsFilesSpellCheckUnique);
+			JsFilesSpellCheckRoutingLogPath = Path.Combine(saveDirectory, LogFileNames.JsFilesSpellCheckRouting);
+			UserDictionaryOrphanWordsFilePath = Path.Combine(saveDirectory, LogFileNames.UserDictionaryOrphanWords);
+			CanonicalCsvBasePath = Path.Combine(saveDirectory, LogFileNames.CanonicalIssuesCsvBase);
+			PdfQualityCsvBasePath = Path.Combine(saveDirectory, LogFileNames.PdfQualityCsvBase);
+			PdfRemediationCsvBasePath = Path.Combine(saveDirectory, LogFileNames.PdfRemediationCsvBase);
+			AssetQualityCsvBasePath = Path.Combine(saveDirectory, LogFileNames.AssetQualityCsvBase);
+			Base64AssetsLogPath = Path.Combine(saveDirectory, LogFileNames.Base64Assets);
 			Base64AssetsDirectory = Path.Combine(saveDirectory, "base64assets");
-			ResourceBloatLogPath = Path.Combine(saveDirectory, "20-resource-bloat.log");
-			ResourceBloatBaselineLogPath = Path.Combine(saveDirectory, "21-resource-bloat-above-baseline.log");
-			CmsTemplateDefectsLogPath = Path.Combine(saveDirectory, "22-cms-template-authoring-defects.log");
-			ContentTypeMismatchLogPath = Path.Combine(saveDirectory, "23-contenttype-extension-mismatch.log");
-			PdfContentTypeMismatchLogPath = Path.Combine(saveDirectory, "24-pdf-contenttype-extension-mismatch.log");
-			ImageContentTypeMismatchLogPath = Path.Combine(saveDirectory, "26-image-contenttype-extension-mismatch.log");
+			ResourceBloatLogPath = Path.Combine(saveDirectory, LogFileNames.ResourceBloat);
+			ResourceBloatBaselineLogPath = Path.Combine(saveDirectory, LogFileNames.ResourceBloatAboveBaseline);
+			CmsTemplateDefectsCsvBasePath = Path.Combine(saveDirectory, LogFileNames.CmsTemplateAuthoringDefectsCsvBase);
+			ContentTypeMismatchLogPath = Path.Combine(saveDirectory, LogFileNames.ContentTypeExtensionMismatch);
+			PdfContentTypeMismatchLogPath = Path.Combine(saveDirectory, LogFileNames.PdfContentTypeExtensionMismatch);
+			ImageContentTypeMismatchLogPath = Path.Combine(saveDirectory, LogFileNames.ImageContentTypeExtensionMismatch);
 			SitemapPath = Path.Combine(saveDirectory, "sitemap.xml");
 		}
 	}

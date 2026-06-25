@@ -8,11 +8,12 @@ namespace Crawler.SpellCheck
 	/// its character offset into the run, so the originating node and exact position stay
 	/// recoverable for excerpt building and highlighting — no re-derivation, ever.
 	///
-	/// The word pattern MIRRORS <c>RegExPatterns.Tokenizer</c> exactly, so the new pipeline
-	/// tokenizes identically to the existing one. That parity is required for trustworthy
-	/// side-by-side comparison of old vs new findings during bring-up. The two patterns must
-	/// stay in sync; collapsing them to one source is a cleanup-pass concern, after the new
-	/// path is proven — the existing class is intentionally left untouched for now.
+	/// This word pattern is the single shared source for tokenization: both Tokenize (this
+	/// pipeline) and TokenizeText (used by the legacy SpellChecker) run off it, so the two
+	/// paths tokenize identically by construction. That parity matters for trustworthy
+	/// side-by-side comparison of old vs new findings. (The pattern was previously duplicated
+	/// in a separate regex holder and kept in sync by hand; that duplicate was removed once the
+	/// new path was proven.)
 	///
 	/// This stage tokenizes the run text AS GIVEN. Canonicalization (entity decoding, soft
 	/// hyphen, dashes, smart quotes) is a separate stage and is applied to the run text before
@@ -109,7 +110,17 @@ namespace Crawler.SpellCheck
 			return -1;
 		}
 
-		// Mirrors RegExPatterns.Tokenizer — keep in sync until deduplicated in cleanup.
+		internal static IEnumerable<string> TokenizeText(string text)
+		{
+			return WordPattern().Matches(text).Cast<Match>().Select(m => m.Value);
+		}
+
+		internal static bool IdentifyWord(string token)
+		{
+			return WordIdentifier().IsMatch(token);
+		}
+
+		// The single source for the word-token pattern, shared by Tokenize (this pipeline) and TokenizeText (the legacy SpellChecker path).
 		[GeneratedRegex(@"\b[\w'äöüßÄÖÜ-]+(?:\s*-\s*[\w'äöüßÄÖÜ]+)*\b|[.,!?;:()""[\]<>]", RegexOptions.Compiled)]
 		private static partial Regex WordPattern();
 
@@ -131,5 +142,8 @@ namespace Crawler.SpellCheck
 			@"\b(?:https?://[^\s]+|(?:www\.)[\w-]+(?:\.[\w-]+)*|[\w-]+(?:\.[\w-]+)*\.(?:de|com|org|net|info|eu|biz|xyz|io|app|gov|edu|at|ch|fr|it|es|nl|uk|co))\b(?:/[^\s]*)?",
 			RegexOptions.Compiled | RegexOptions.IgnoreCase)]
 		private static partial Regex UrlOrDomainPattern();
+
+		[GeneratedRegex(@"^[a-zA-ZäöüßÄÖÜ-]+(-[a-zA-ZäöüßÄÖÜ]+)*$", RegexOptions.Compiled)]
+		private static partial Regex WordIdentifier();
 	}
 }

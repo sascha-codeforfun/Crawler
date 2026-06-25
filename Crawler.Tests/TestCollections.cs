@@ -8,7 +8,7 @@ namespace Crawler.Tests
 	/// collide on the log file. Placing them all in this collection forces xUnit
 	/// to run them sequentially.
 	/// Test classes that do not use Logger (AttributeNoiseDetectorTests,
-	/// ContentQualityTests, UrlExtractorTests, PdfQualityAnalyzerTests) are
+	/// ContentQualityTests, ExtractorTests, PdfQualityAnalyzerTests) are
 	/// not in this collection and run freely in parallel.
 	/// </summary>
 	[CollectionDefinition("Logger")]

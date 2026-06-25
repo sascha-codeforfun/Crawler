@@ -9,7 +9,7 @@ namespace Crawler
 	{
 		public static void FindSelfLinks(
 			string directoryToScanPath,
-			string scanningResultsPath,
+			string scanningResultsCsvBasePath,
 			List<string> queryStringsToIgnoreForSelfLinkDetermination,
 			string filePattern,
 			int maxDegreeOfParallelism = 0,
@@ -17,7 +17,7 @@ namespace Crawler
 			int contextSnippetLength = 240)
 		{
 			var htmlFiles = Directory.GetFiles(directoryToScanPath, filePattern, SearchOption.AllDirectories);
-			var results = new ConcurrentQueue<string>();
+			var results = new ConcurrentQueue<string?[]>();
 
 			var ignoredQueryKeys = queryStringsToIgnoreForSelfLinkDetermination is { Count: > 0 }
 				? new HashSet<string>(queryStringsToIgnoreForSelfLinkDetermination, StringComparer.OrdinalIgnoreCase)
@@ -160,10 +160,10 @@ namespace Crawler
 							// [KEEP] Composed via IssueLogWriter — replaces the
 							// previous local EscapeForCsvPipe helper. Each field
 							// is sanitized for CR / LF / control chars / delimiter.
-							var line = IssueLogWriter.ComposeLine(IssueLogWriter.PipeDelimiter,
-								fileName, fileUrl, hrefValue, snippet ?? string.Empty);
-
-							results.Enqueue(line);
+							results.Enqueue(new string?[]
+							{
+								fileName, fileUrl, hrefValue, snippet ?? string.Empty
+							});
 						}
 					}
 				}
@@ -173,35 +173,40 @@ namespace Crawler
 				}
 			});
 
-			// Use IssueLogWriter.Utf8WithBom (BOM-emitting) for consistency
-			// with the rest of the log corpus. Earlier the encoding was
-			// `new UTF8Encoding(false)` (no BOM), producing inconsistent output
-			// vs. the BOM-prefixed logs written via IssueLogWriter's non-streaming
-			// helpers (10, 16, 17, etc.).
-			using var writer = new StreamWriter(scanningResultsPath, false, IssueLogWriter.Utf8WithBom);
-			// Header — composed through IssueLogWriter for consistency. Field names
-			// contain no delimiter / control chars so this passes through unchanged.
-			writer.WriteLine(IssueLogWriter.ComposeLine(IssueLogWriter.PipeDelimiter,
-				"File", "FileUrl", "LinkFound", "ContextSnippet"));
-
 			// Drain queue and sort deterministically before write. The
 			// Parallel.ForEach above enqueues in completion order, which is
 			// CPU-scheduling-dependent — same input could produce different
-			// byte-level output across runs. Sort by the composed line directly:
-			// the line starts with the file hash + filename, which gives a
-			// stable, alphabetic ordering that's also useful to operators reading
-			// the log (related files cluster).
-			var sortedResults = new List<string>(results.Count);
-			while (results.TryDequeue(out var csvLine))
+			// byte-level output across runs. Sort by the assembled fields
+			// (filename first) for a stable, alphabetic ordering that is also
+			// useful to operators reading the log (related files cluster).
+			var dataRows = new List<string?[]>(results.Count);
+			while (results.TryDequeue(out var row))
 			{
-				sortedResults.Add(csvLine);
+				dataRows.Add(row);
 			}
+			dataRows.Sort(static (a, b) =>
+			{
+				int n = Math.Min(a.Length, b.Length);
+				for (int i = 0; i < n; i++)
+				{
+					int c = string.CompareOrdinal(a[i] ?? string.Empty, b[i] ?? string.Empty);
+					if (c != 0)
+					{
+						return c;
+					}
+				}
+				return a.Length - b.Length;
+			});
 
-			sortedResults.Sort(StringComparer.Ordinal);
-			foreach (var csvLine in sortedResults)
+			// Dual-locale CSV pair (BOM, RFC-4180 quoted) via IssueLogWriter.WriteCsvPair —
+			// replaces the former single BOM StreamWriter. ContextSnippet (HTML) can now
+			// carry a delimiter verbatim (quoted) instead of having it stripped.
+			var records = new List<string?[]>(dataRows.Count + 1)
 			{
-				writer.WriteLine(csvLine);
-			}
+				new string?[] { "File", "FileUrl", "LinkFound", "ContextSnippet" }
+			};
+			records.AddRange(dataRows);
+			IssueLogWriter.WriteCsvPair(scanningResultsCsvBasePath, records);
 		}
 
 		public static string ExtractHtmlContextSnippet(string fileContent, HtmlNode aNode, int contextRadiusChars, int maxSnippetLength)

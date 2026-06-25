@@ -140,7 +140,7 @@ namespace Crawler
 				var mostRecentAfter = Directory
 					.EnumerateDirectories(sessionParentDirectory)
 					.Select(d => new DirectoryInfo(d))
-					.Where(d => Tools.IsTimestampFolderName(d.Name))
+					.Where(d => Snapshots.SnapshotFolder.Matches(d.Name))
 					.OrderByDescending(d => d.CreationTimeUtc)
 					.FirstOrDefault();
 
@@ -148,8 +148,8 @@ namespace Crawler
 				TimeSpan? prevDuration = null;
 				if (mostRecentAfter != null)
 				{
-					var prevLog = Path.Combine(mostRecentAfter.FullName, "01-crawler.log");
-					var (_, dur, _) = Tools.AnalysePreviousCrawl(prevLog, url);
+					var prevLog = Path.Combine(mostRecentAfter.FullName, LogFileNames.Crawler);
+					var (_, dur, _) = Snapshots.CrawlLog.Analyse(prevLog, url);
 					prevDuration = dur;
 				}
 
@@ -199,7 +199,7 @@ namespace Crawler
 				if (emptyChoice == ConsoleKey.N)
 				{
 					ctx.IsDebugSession = false;
-					ctx.TimeStamp = Tools.GetTimeStamp(false, string.Empty,
+					ctx.TimeStamp = Snapshots.SnapshotFolder.NewName(false, string.Empty,
 						Path.Combine(workingFolder, urlDirectory));
 					ctx.RebuildTimestampPaths(Path.Combine(workingFolder, urlDirectory, ctx.TimeStamp));
 					Logger.LogInfo("Empty download folder — switching to fresh crawl.");
@@ -217,13 +217,13 @@ namespace Crawler
 		/// Checks a snapshot for completeness. If incomplete, shows a dialog
 		/// with size info and lets the user delete the snapshot, keep it, or
 		/// abort. Returns false if the user chose to abort.
-		/// Silent-mode equivalent: <see cref="Tools.CheckSnapshotComplete"/>
+		/// Silent-mode equivalent: <see cref="Snapshots.CrawlLog.Summarise"/>
 		/// returns the pure check, and the caller decides whether to warn
 		/// and proceed.
 		/// </summary>
 		internal static bool CheckSnapshotIntegrity(DirectoryInfo snapshot, string baseUrl)
 		{
-			var (isComplete, fileCount, totalMb) = Tools.CheckSnapshotComplete(snapshot, baseUrl);
+			var (isComplete, fileCount, totalMb) = Snapshots.CrawlLog.Summarise(snapshot, baseUrl);
 			if (isComplete)
 			{
 				return true;
@@ -322,7 +322,7 @@ namespace Crawler
 
 		/// <summary>
 		/// Interactive [R]/[S]/[A]/[Q] loop for resolving orphan files
-		/// detected by <see cref="Tools.DetectOrphans"/>. Renames chosen files
+		/// detected by <see cref="Downloader.OrphanFiles.Detect"/>. Renames chosen files
 		/// to .bak in place. Caller is responsible for the silent-mode path
 		/// (log-and-skip) and for the empty-orphans early return.
 		/// </summary>
@@ -342,7 +342,7 @@ namespace Crawler
 			{
 				if (renameAll)
 				{
-					Tools.RenameOrphan(downloadDirectory, filename, bakExt);
+					Downloader.OrphanFiles.Quarantine(downloadDirectory, filename, bakExt);
 					renamed++;
 					Logger.LogWarning($"  Renamed (batch): {filename} → {filename}{".bak"}");
 					continue;
@@ -376,13 +376,13 @@ namespace Crawler
 				if (key == ConsoleKey.A)
 				{
 					renameAll = true;
-					Tools.RenameOrphan(downloadDirectory, filename, bakExt);
+					Downloader.OrphanFiles.Quarantine(downloadDirectory, filename, bakExt);
 					renamed++;
 					Logger.LogWarning($"  Renamed: {filename} → {filename}{".bak"}");
 				}
 				else if (key == ConsoleKey.R)
 				{
-					Tools.RenameOrphan(downloadDirectory, filename, bakExt);
+					Downloader.OrphanFiles.Quarantine(downloadDirectory, filename, bakExt);
 					renamed++;
 					Logger.LogWarning($"  Renamed: {filename} → {filename}{".bak"}");
 				}
@@ -540,6 +540,7 @@ namespace Crawler
 			int filesDeleted = 0;
 			int dirsDeleted = 0;
 			int linksSkipped = 0;
+			int filesSkipped = 0;
 			int errors = 0;
 
 			foreach (var entry in Directory.EnumerateFileSystemEntries(snapshotPath))
@@ -583,9 +584,20 @@ namespace Crawler
 					}
 					else
 					{
-						File.Delete(entry);
-						filesDeleted++;
-						Logger.LogInfo($"  Deleted file: {name}");
+						// Retry-on-lock, same gate as the writers: if the file is open
+						// in Excel, prompt the operator to close-and-retry or [S]kip
+						// rather than hard-erroring. A skip is counted as skipped, not
+						// an error — the leftover is re-derivable and swept next time.
+						if (FileIo.DeleteWithRetry(entry, name))
+						{
+							filesDeleted++;
+							Logger.LogInfo($"  Deleted file: {name}");
+						}
+						else
+						{
+							filesSkipped++;
+							Logger.LogWarning($"  Skipped (left open): {name}");
+						}
 					}
 				}
 				catch (Exception ex)
@@ -595,7 +607,8 @@ namespace Crawler
 				}
 			}
 
-			Logger.LogInfo($"CleanSweepSnapshot: complete — {filesDeleted} file(s), {dirsDeleted} directory(ies) deleted, {linksSkipped} link(s) skipped, {errors} error(s).");
+			Logger.LogInfo($"CleanSweepSnapshot: complete — {filesDeleted} file(s), {dirsDeleted} directory(ies) deleted, " +
+				$"{linksSkipped} link(s) skipped, {filesSkipped} locked file(s) left, {errors} error(s).");
 
 			// Console summary (the per-file wall above is muted by the caller's quiet scope).
 			if (!CrawlerContext.Silent)
@@ -603,15 +616,16 @@ namespace Crawler
 				ConsoleUi.WriteHeader("SWEEP");
 			}
 			ConsoleUi.WriteStepRow("Deleted", $"{filesDeleted} file(s) · {dirsDeleted} dir(s)");
-			if (linksSkipped > 0 || errors > 0)
+			int totalSkipped = linksSkipped + filesSkipped;
+			if (totalSkipped > 0 || errors > 0)
 			{
 				ConsoleUi.WriteStepRow("Skipped / errors",
-					$"{linksSkipped} skipped · {errors} error(s)", dimmed: true);
+					$"{totalSkipped} skipped · {errors} error(s)", dimmed: true);
 			}
 		}
 
 		private static readonly HashSet<string> CleanSweepKeepEntries =
-			new(StringComparer.OrdinalIgnoreCase) { "download", "00-crawler.log", "01-crawler.log" };
+			new(StringComparer.OrdinalIgnoreCase) { "download", LogFileNames.CrawlerRaw, LogFileNames.Crawler };
 
 		/// <summary>
 		/// True if the named entry (file or directory, basename only) must be

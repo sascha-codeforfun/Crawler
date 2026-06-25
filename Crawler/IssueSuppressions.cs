@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Crawler.Quality;
 
 namespace Crawler
 {
@@ -40,8 +41,8 @@ namespace Crawler
 		/// <param name="RuleHits">For each rule index (0-based, matching the input rules list),
 		/// the count of findings suppressed by that rule via first-match attribution.
 		/// Rules with no hits appear with count 0.</param>
-		public record FilterResult(
-			List<ContentQuality.QualityIssue> Emitted,
+		internal record FilterResult(
+			List<QualityIssue> Emitted,
 			IReadOnlyDictionary<int, int> RuleHits);
 
 		/// <summary>
@@ -49,11 +50,11 @@ namespace Crawler
 		/// Preserves input order in <see cref="FilterResult.Emitted"/>.
 		/// Disabled rules and rules with missing/empty Type are skipped.
 		/// </summary>
-		public static FilterResult Apply(
-			IEnumerable<ContentQuality.QualityIssue> findings,
+		internal static FilterResult Apply(
+			IEnumerable<QualityIssue> findings,
 			IReadOnlyList<IssueSuppressionRule>? rules)
 		{
-			var emitted = new List<ContentQuality.QualityIssue>();
+			var emitted = new List<QualityIssue>();
 			var hits = new Dictionary<int, int>();
 
 			// Pre-build per-rule active flags + Pages-glob regexes so we don't
@@ -135,7 +136,7 @@ namespace Crawler
 		internal static bool Matches(
 			IssueSuppressionRule rule,
 			Regex?[]? pageRegexes,
-			ContentQuality.QualityIssue issue)
+			QualityIssue issue)
 		{
 			// Type — required exact match. Case-sensitive (IssueType constants are uppercase).
 			if (!string.Equals(rule.Type, issue.IssueType, StringComparison.Ordinal))

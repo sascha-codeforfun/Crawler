@@ -38,7 +38,8 @@ namespace Crawler
 
 	public static class AssetQuality
 	{
-		private const string Header = "Filename|Url|IssueType|Detail|Context|Exif|Iptc|Xmp";
+		private static readonly string?[] HeaderFields =
+			["Filename", "Url", "IssueType", "Detail", "Context", "Exif", "Iptc", "Xmp"];
 
 		// Leading bytes read once per file: enough for the magic sniff AND the
 		// fixed-position dimension headers (PNG IHDR ends at byte 24, GIF at 10).
@@ -49,17 +50,18 @@ namespace Crawler
 
 		/// <summary>
 		/// Scans the download directory for raster images and returns one
-		/// IssueRecord per (asset, finding). Writes a pipe-delimited log to
-		/// <paramref name="logPath"/> (same row shape as log 10). Pure of pipeline
-		/// state; callable in isolation for testing.
+		/// IssueRecord per (asset, finding). Writes a dual-locale CSV pair via
+		/// <see cref="IssueLogWriter.WriteCsvPair"/> to <paramref name="csvBasePath"/>
+		/// (".._semicolon.csv" / ".._comma.csv"; same row shape as log 10). Pure of
+		/// pipeline state; callable in isolation for testing.
 		/// </summary>
 		public static List<IssueTracking.IssueRecord> Analyse(
 			string downloadDirectory,
-			string logPath,
+			string csvBasePath,
 			AssetQualityConfig config)
 		{
 			var records = new List<IssueTracking.IssueRecord>();
-			var logLines = new List<string> { Header };
+			var logRows = new List<string?[]> { HeaderFields };
 
 			if (!config.IsEnabled)
 			{
@@ -83,7 +85,7 @@ namespace Crawler
 				.OrderBy(f => f, StringComparer.Ordinal)   // deterministic output
 				.ToList();
 
-			var perFileLog = new List<string>[files.Count];
+			var perFileLog = new List<string?[]>[files.Count];
 			var perFileRecords = new List<IssueTracking.IssueRecord>[files.Count];
 
 			// Per-file analysis is independent and I/O-bound (header read, optional
@@ -95,7 +97,7 @@ namespace Crawler
 				new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) },
 				i =>
 				{
-					var localLog = new List<string>();
+					var localLog = new List<string?[]>();
 					var localRecords = new List<IssueTracking.IssueRecord>();
 					perFileLog[i] = localLog;
 					perFileRecords[i] = localRecords;
@@ -176,7 +178,7 @@ namespace Crawler
 					var crawlSource = CrawlIndex.LookUpSourceForFile(filename);
 					foreach (var (word, detail, context, exif, iptc, xmp) in findings)
 					{
-						localLog.Add($"{filename}|{urlForLog}|ASSET_{word}|{detail}|{context}|{exif}|{iptc}|{xmp}");
+						localLog.Add([filename, urlForLog, $"ASSET_{word}", detail, context, exif, iptc, xmp]);
 						localRecords.Add(new IssueTracking.IssueRecord
 						{
 							Type = "ASSET",
@@ -191,16 +193,17 @@ namespace Crawler
 
 			foreach (var slot in perFileLog)
 			{
-				logLines.AddRange(slot);
+				logRows.AddRange(slot);
 			}
 			foreach (var slot in perFileRecords)
 			{
 				records.AddRange(slot);
 			}
 
-			FileIo.WriteAllLinesWithRetry(logPath, logLines, Path.GetFileName(logPath));
+			IssueLogWriter.WriteCsvPair(csvBasePath, logRows);
 			Logger.LogInfo($"AssetQuality: {records.Count} finding(s) across {files.Count} file(s). " +
-				$"See {Path.GetFileName(logPath)}.");
+				$"See {Path.GetFileName(csvBasePath)}{IssueLogWriter.CsvSemicolonSuffix} / " +
+				$"{Path.GetFileName(csvBasePath)}{IssueLogWriter.CsvCommaSuffix}.");
 			return records;
 		}
 

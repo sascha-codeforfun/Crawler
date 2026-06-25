@@ -14,7 +14,7 @@ namespace Crawler
 	/// lacks. Keeping it out of LoadFromJson also keeps the config round-trip drift
 	/// guard machine-independent.
 	///
-	/// Mirrors <see cref="DictionaryIntegrity.CheckOrHalt"/> in shape and convention:
+	/// Mirrors <see cref="Lexicon.Integrity.CheckOrHalt"/> in shape and convention:
 	/// run at startup (after config load, before any directory creation or I/O); on
 	/// failure write the detail to application.log and a calm CONFIG CHECK screen to
 	/// the console, then return false (caller is expected to PressEnterToExit and return).

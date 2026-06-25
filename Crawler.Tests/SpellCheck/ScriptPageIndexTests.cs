@@ -7,11 +7,11 @@ namespace Crawler.Tests.SpellCheck
 	/// <summary>
 	/// Pins the 647 reverse index (bundle → pages): the inversion, reach counting, and — critically —
 	/// that a bundle re-deployed under a different fingerprint across pages still unifies to one key
-	/// (so reach is real, not split by cache-busters). Synthetic pages; no disk, no UrlCache.
+	/// (so reach is real, not split by cache-busters). Synthetic pages; no disk, no Cache.
 	/// </summary>
 	public class ScriptPageIndexTests
 	{
-		private static string Page(params string[] srcs)
+		private static string Page(params string?[] srcs)
 		{
 			var sb = new System.Text.StringBuilder("<html><body>");
 			foreach (var s in srcs)
@@ -53,7 +53,7 @@ namespace Crawler.Tests.SpellCheck
 		{
 			var idx = ScriptPageIndex.Build(new List<(string, string)>
 			{
-				("https://s/p.html", Page(new string[] { null })),
+				("https://s/p.html", Page(new string?[] { null })),
 			});
 
 			Assert.Equal(0, idx.KeyCount);

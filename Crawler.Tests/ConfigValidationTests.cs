@@ -1192,5 +1192,34 @@ namespace Crawler.Tests
 			Assert.Contains("has an empty Url", ex.Message);
 		}
 
+
+		// ── IsValidFilePattern ────────────────────────────────────────────────
+
+		[Theory]
+		// Valid: "*." + 1-8 alphanumeric chars.
+		[InlineData("*.html", true)]
+		[InlineData("*.htm", true)]
+		[InlineData("*.aspx", true)]
+		[InlineData("*.xhtml", true)]
+		[InlineData("*.h", true)]            // 1-char extension
+		[InlineData("*.HTML", true)]         // uppercase allowed
+		[InlineData("*.htm5", true)]         // digits allowed
+		[InlineData("*.abcdefgh", true)]     // 8 chars — the cap, allowed
+											 // Invalid.
+		[InlineData("html", false)]          // no "*." — GetFiles treats as literal filename
+		[InlineData(".html", false)]         // missing wildcard
+		[InlineData("*", false)]             // bare wildcard, no extension
+		[InlineData("*.", false)]            // empty extension
+		[InlineData("*.*", false)]           // matches everything
+		[InlineData("*.ht ml", false)]      // space
+		[InlineData("*.ht.ml", false)]      // dot in extension
+		[InlineData("*.abcdefghi", false)]   // 9 chars — exceeds the 8 cap
+		[InlineData("*.markuppage", false)]  // 10 chars — implausible
+		[InlineData("**.html", false)]       // double wildcard
+		[InlineData("", false)]              // empty
+		public void IsValidFilePattern_AcceptsOnlyStarDotExtensionGlobs(string pattern, bool expected)
+		{
+			Assert.Equal(expected, Config.IsValidFilePattern(pattern));
+		}
 	}
 }

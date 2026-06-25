@@ -10,7 +10,7 @@ namespace Crawler
 	// Produces config.private.delta — a slim JSON file showing only the fields
 	// where config.private.json differs from config.json. Run on every startup
 	// AFTER all halt-able config validity checks pass (ValidateConfig and
-	// DictionaryIntegrity.CheckOrHalt) so the operator never gets a delta for
+	// Integrity.CheckOrHalt) so the operator never gets a delta for
 	// a config that didn't run.
 	//
 	// Purpose (fileset #317):

@@ -1,5 +1,6 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
@@ -15,7 +16,7 @@ namespace Crawler.Tests
 	/// existing AssetQualityTests; this file covers the scan pipeline. SYNTHETIC
 	/// fixtures throughout.
 	///
-	/// UrlCache is process-wide static with no reset, so URL tests use GUID-unique
+	/// Cache is process-wide static with no reset, so URL tests use GUID-unique
 	/// filenames. In the Logger collection: Analyse / CrawlIndex log via the static
 	/// Logger.
 	/// </summary>
@@ -23,14 +24,14 @@ namespace Crawler.Tests
 	public class AssetQualityAnalyseTests : IDisposable
 	{
 		private readonly string _dir;
-		private readonly string _log;
+		private readonly string _csvBase;
 
 		public AssetQualityAnalyseTests()
 		{
 			_dir = Path.Combine(Path.GetTempPath(), $"AssetQ_{Guid.NewGuid():N}");
 			Directory.CreateDirectory(_dir);
 			Logger.Initialize(Path.Combine(_dir, "test.log"), silent: true);
-			_log = Path.Combine(_dir, "asset_quality.log");
+			_csvBase = Path.Combine(_dir, "asset_quality");
 		}
 
 		public void Dispose()
@@ -105,7 +106,7 @@ namespace Crawler.Tests
 		{
 			var path = Path.Combine(_dir, $"lookup_{Guid.NewGuid():N}.lku");
 			File.WriteAllLines(path, new[] { $"{filename}|{url}|{source}" }, Encoding.UTF8);
-			UrlCache.LoadCache(path);
+			Cache.Load(path);
 		}
 
 		private static AssetQualityConfig Cfg(
@@ -122,7 +123,7 @@ namespace Crawler.Tests
 			};
 
 		private List<IssueTracking.IssueRecord> Analyse(AssetQualityConfig config) =>
-			AssetQuality.Analyse(_dir, _log, config);
+			AssetQuality.Analyse(_dir, _csvBase, config);
 
 		// ── orchestration: skips ────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ namespace Crawler.Tests
 		[Fact]
 		public void Analyse_DirectoryMissing_ReturnsEmpty()
 		{
-			Assert.Empty(AssetQuality.Analyse(Path.Combine(_dir, "nope"), _log, Cfg()));
+			Assert.Empty(AssetQuality.Analyse(Path.Combine(_dir, "nope"), _csvBase, Cfg()));
 		}
 
 		[Fact]
@@ -426,7 +427,9 @@ namespace Crawler.Tests
 			Assert.Contains("author", r.Excerpt);
 
 			// The leaked values surface in the asset log's Exif column (Make=X; Artist=Y).
-			var logLine = Assert.Single(File.ReadAllLines(_log), l => l.Contains("ASSET_METADATA"));
+			var logLine = Assert.Single(
+				File.ReadAllLines(_csvBase + IssueLogWriter.CsvSemicolonSuffix),
+				l => l.Contains("ASSET_METADATA"));
 			Assert.Contains("Make=X", logLine);
 			Assert.Contains("Artist=Y", logLine);
 		}

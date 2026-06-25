@@ -24,11 +24,12 @@ namespace Crawler
 	//                        host (may be intentional syndication). Logged only,
 	//                        NOT auto-promoted to IssueTracking.
 	//
-	// Output: 16-canonical-issues.log (timestamped folder, same format as other
-	// analysis logs). IssueTracking entries returned for the caller to merge.
+	// Output: 16-canonical-issues_semicolon.csv and _comma.csv (timestamped folder,
+	// dual-locale CSV pair, like the other human-facing analysis logs). IssueTracking
+	// entries returned for the caller to merge.
 	//
-	// Delimiter: pipe (|) — RFC 3986 defines '|' as not valid in URLs, making
-	// it a safe field separator that will never appear inside a URL value.
+	// Fields are RFC 4180-quoted (IssueLogWriter.WriteCsvPair): a delimiter or quote
+	// inside a URL or Detail value is preserved verbatim rather than stripped.
 	// ─────────────────────────────────────────────────────────────────────────
 
 	public static class CanonicalAnalyzer
@@ -37,7 +38,7 @@ namespace Crawler
 
 		/// <summary>
 		/// Analyses canonical links across all downloaded HTML files.
-		/// Writes 16-canonical-issues.log and returns IssueRecords for
+		/// Writes the 16-canonical-issues dual-locale CSV pair and returns IssueRecords for
 		/// CANONICAL_404, CANONICAL_CHAIN, and CANONICAL_CONFLICT to be
 		/// merged into IssueTracking.log by the caller.
 		/// CANONICAL_EXTERNAL issues are logged but not returned.
@@ -45,7 +46,7 @@ namespace Crawler
 		public static List<IssueTracking.IssueRecord> Analyse(
 			string downloadDirectory,
 			string crawlerIndexPath,
-			string canonicalLogPath,
+			string canonicalCsvBasePath,
 			string siteBaseUrl,
 			IReadOnlyList<string> allowedSubdomainUrls,
 			string filePattern)
@@ -84,9 +85,10 @@ namespace Crawler
 			var issues = DetectIssues(canonicalMap, urlToFilename, siteBaseUrl, allowedSubdomainUrls);
 
 			// Write log.
-			WriteLog(canonicalLogPath, issues);
+			WriteLog(canonicalCsvBasePath, issues);
 			Logger.LogInfo($"Canonical analysis: {issues.Count} issue(s) found. " +
-				$"See {Path.GetFileName(canonicalLogPath)}.");
+				$"See {Path.GetFileName(canonicalCsvBasePath)}{IssueLogWriter.CsvSemicolonSuffix} / " +
+				$"{Path.GetFileName(canonicalCsvBasePath)}{IssueLogWriter.CsvCommaSuffix}.");
 
 			// Return only auto-promotable issues (not CANONICAL_EXTERNAL).
 			return issues
@@ -276,7 +278,7 @@ namespace Crawler
 
 		// ── Log writer ────────────────────────────────────────────────────────
 
-		private static void WriteLog(string logPath, List<CanonicalIssue> issues)
+		private static void WriteLog(string csvBasePath, List<CanonicalIssue> issues)
 		{
 			// [KEEP] Routed through IssueLogWriter — Detail can include canonical
 			// URL fragments and crawled page metadata; sanitization protects
@@ -289,7 +291,7 @@ namespace Crawler
 				.OrderBy(i => i.IssueType)
 				.ThenBy(i => i.PageUrl)
 				.Select(i => new string?[] { i.PageUrl, i.IssueType, i.CanonicalUrl, i.Detail }));
-			IssueLogWriter.Write(logPath, IssueLogWriter.PipeDelimiter, records);
+			IssueLogWriter.WriteCsvPair(csvBasePath, records);
 		}
 
 		// ── Helpers ───────────────────────────────────────────────────────────

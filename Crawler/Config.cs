@@ -3,8 +3,9 @@ namespace Crawler
 	using System.Diagnostics.CodeAnalysis;
 	using System.Text;
 	using System.Text.Json;
+	using System.Text.RegularExpressions;
 
-	public class Config
+	public partial class Config
 	{
 		/// <summary>
 		/// Per-site definitions for multi-site operation. Each entry carries the
@@ -86,7 +87,7 @@ namespace Crawler
 
 		/// <summary>
 		/// Operator-curated list of substring patterns that exclude matching URLs
-		/// from the crawl. Applied by <see cref="Tools.IsValidLink"/> via a
+		/// from the crawl. Applied by <see cref="Urls.Validity.IsInDownloadScope"/> via a
 		/// case-insensitive <c>Contains</c> check against the link string — any
 		/// link whose URL contains an enabled entry's <c>Value</c> as a substring
 		/// (anywhere in the URL) is rejected. Default empty.
@@ -95,7 +96,7 @@ namespace Crawler
 		/// want crawled because the response shape is uninteresting or
 		/// disproportionately large (e.g. forum URLs, CMS stub pages). NOT used
 		/// for security: the security boundary (primary domain / configured
-		/// subdomains) lives in <c>IsValidLink</c>'s domain gate above this
+		/// subdomains) lives in <c>IsInDownloadScope</c>'s domain gate above this
 		/// check and is enforced regardless of <c>DownloadExclusions</c> state.
 		///
 		/// Validated at config-load time by <see cref="DownloadExclusionsConfigValidator"/>:
@@ -155,7 +156,7 @@ namespace Crawler
 		// Empty until resolution; no subdomains followed unless the selected site lists them.
 		public List<string> UrlSubdomainsAllowed { get; set; } = [];
 
-		// Path prefixes used by UrlExtractor to find URLs embedded in <script> block
+		// Path prefixes used by Extractor to find URLs embedded in <script> block
 		// JSON/config strings. Only paths starting with one of these prefixes are
 		// extracted. Configure in config.private.json — keep site-specific prefixes
 		// out of the shared config to avoid leaking internal path structures.
@@ -241,7 +242,7 @@ namespace Crawler
 		// -- Dictionary maintenance --
 		// End-of-run orphan/redundancy review for the user and site dictionaries.
 		// Orphans are discovered by the cross-off usage recorder during spell-check
-		// (DictionaryUsageTracker) — an entry never consulted on any page is an orphan —
+		// (Lexicon.UsageTracker) — an entry never consulted on any page is an orphan —
 		// so there is no separate corpus scan. See DictionaryMaintenanceConfig.
 		public DictionaryMaintenanceConfig DictionaryMaintenance { get; set; } = new();
 
@@ -476,7 +477,7 @@ namespace Crawler
 			// tests `link.StartsWith(entry)` and StartsWith("") is always true —
 			// turning "[ \"\" ]" into "allow every URL". A sloppy config
 			// ("UrlSubdomainsAllowed": [ "" ]) must NOT silently disable
-			// containment. See IsValidLink and the redirect-allowed check.
+			// containment. See IsInDownloadScope and the redirect-allowed check.
 			UrlSubdomainsAllowed = site.UrlSubdomainsAllowed is null
 				? []
 				: [.. site.UrlSubdomainsAllowed.Where(s => !string.IsNullOrWhiteSpace(s))]; // copy + sanitise, not alias — wholesale replace
@@ -700,7 +701,7 @@ namespace Crawler
 			{
 				errors.Add("FilePattern is required.");
 			}
-			else if (!RegExPatterns.IsValidFilePattern(config.FilePattern))
+			else if (!IsValidFilePattern(config.FilePattern))
 			{
 				errors.Add(
 					$"FilePattern must be a glob of the form \"*.ext\" where ext is " +
@@ -1154,6 +1155,25 @@ namespace Crawler
 
 			throw new InvalidOperationException(string.Join("\n", lines));
 		}
+
+		/// <summary>
+		/// Validates a crawl FilePattern: must be a glob of the form "*.ext" where
+		/// ext is 1-8 letters/digits (e.g. "*.html", "*.htm", "*.aspx"). The tool
+		/// is generic across sites whose pages may use different extensions, so the
+		/// extension comes from config — but it flows straight into
+		/// Directory.GetFiles/EnumerateFiles at many sites, so a malformed value
+		/// (no "*.", a bare "*", path characters, or an implausibly long extension)
+		/// must be rejected at config validation rather than silently matching
+		/// nothing (a non-glob like "html" is treated by GetFiles as a literal
+		/// filename and matches no files, with no error).
+		/// </summary>
+		internal static bool IsValidFilePattern(string pattern)
+		{
+			return FilePatternGlob().IsMatch(pattern);
+		}
+
+		[GeneratedRegex(@"^\*\.[A-Za-z0-9]{1,8}$")]
+		private static partial Regex FilePatternGlob();
 	}
 
 	public class TagItem
@@ -1203,7 +1223,7 @@ namespace Crawler
 	/// halt on startup: the app computes and writes the expected checksums to
 	/// application.log, then halts and asks the operator to paste them into
 	/// config. Non-empty mismatched values also trigger halt. See
-	/// DictionaryIntegrity.CheckOrHalt for the verification logic.
+	/// Integrity.CheckOrHalt for the verification logic.
 	/// </summary>
 	public class DictionaryBundleConfig
 	{
@@ -1326,7 +1346,7 @@ namespace Crawler
 	///
 	/// The Pattern is validated at config load time; a malformed regex halts the
 	/// app with a pointed message naming the offending entry, same pattern as
-	/// DictionaryIntegrity.CheckOrHalt.
+	/// Integrity.CheckOrHalt.
 	/// </summary>
 	public record CrawlHistoryDiagnosticHeaderExtractor
 	{
@@ -1362,13 +1382,13 @@ namespace Crawler
 
 	/// <summary>
 	/// One operator-curated exclusion entry for <see cref="Config.DownloadExclusions"/>.
-	/// Applied by <see cref="Tools.IsValidLink"/> as a case-insensitive substring
+	/// Applied by <see cref="Urls.Validity.IsInDownloadScope"/> as a case-insensitive substring
 	/// check: any link whose URL contains <see cref="Value"/> anywhere is rejected
 	/// (when <see cref="Enabled"/> is true).
 	///
 	/// Used for operational filtering — sections to skip because they're large,
 	/// uninteresting, or noise — NOT for security. The security boundary lives
-	/// in <c>IsValidLink</c>'s domain gate and is enforced regardless of what
+	/// in <c>IsInDownloadScope</c>'s domain gate and is enforced regardless of what
 	/// is or isn't in <c>DownloadExclusions</c>.
 	///
 	/// Validated at startup by <see cref="DownloadExclusionsConfigValidator"/>:
@@ -1951,27 +1971,6 @@ namespace Crawler
 		public bool CheckQuotePairing { get; set; } = true;
 
 		/// <summary>
-		/// Second-pass verification of quote-pairing flags. When the cheap
-		/// left-to-right stack-based pass produces a flag, a proximity-based
-		/// verification pass re-examines the same block. If the verification
-		/// pass can pair the offending character cleanly (nearest opener-closer
-		/// matching, system-aware), the original flag is downgraded to
-		/// QUOTE_AMBIGUOUS — meaning "the parsers disagree; review judgement
-		/// required" rather than "definitely wrong."
-		///
-		/// High-confidence flags (QUOTE_UNMATCHED / QUOTE_WRONG_CLOSE /
-		/// QUOTE_WRONG_OPEN) stay at their original type when the verification
-		/// pass cannot resolve them. Per-flag granularity — a block can produce
-		/// a mix of high-confidence and ambiguous flags.
-		///
-		/// Operator workflow: filter QUOTE_AMBIGUOUS out of the IssueTracking
-		/// pivot for first-pass triage; review separately as a second QA pass
-		/// when there is time. Turn this flag off if the AMBIGUOUS tier becomes
-		/// noise on a stable site.
-		/// </summary>
-		public bool CheckQuotePairingVerification { get; set; } = true;
-
-		/// <summary>
 		/// When spell-check produces ≥ TranslationIssueErrorThreshold errors on a page,
 		/// check whether ≥ TranslationIssuePassRatio of those errors pass another loaded
 		/// dictionary. If so, flag the page as POTENTIAL_TRANSLATION in 10-content-quality-issues.log
@@ -2043,8 +2042,9 @@ namespace Crawler
 		///     filter routes findings: invisibles inside p/h*/li/td/th are
 		///     editor-paste-class (caught elsewhere); invisibles outside those
 		///     are template-emitted.
-		/// Findings go to a separate log (22-cms-template-authoring-defects.log)
-		/// so they can be routed to the CMS template/architect team rather than
+		/// Findings go to a separate log (the 22-cms-template-authoring-defects
+		/// dual-locale CSV pair) so they can be routed to the CMS template/architect
+		/// team rather than
 		/// to content editors. One finding per (file, codepoint) — never per
 		/// occurrence — with occurrence count surfaced in the Detail.
 		/// </summary>
@@ -2589,7 +2589,7 @@ namespace Crawler
 	/// End-of-run dictionary maintenance for the user and site dictionaries.
 	///
 	/// Orphans are discovered by the cross-off usage recorder during spell-check
-	/// (<see cref="DictionaryUsageTracker"/>): any non-pinned entry that was never
+	/// (<see cref="Lexicon.UsageTracker"/>): any non-pinned entry that was never
 	/// consulted on a crawled page is an orphan. Redundant entries (prefix-stripped
 	/// remainder accepted by the system dictionary) are computed from the loaded
 	/// bundles. Entries prefixed with '!' are pinned and always exempt.

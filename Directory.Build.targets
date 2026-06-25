@@ -1,57 +1,84 @@
 <Project>
 
-  <!-- =====================================================================
-       Solution-wide forced clean.
+	<PropertyGroup>
+		<ExportTriggerProject>Crawler</ExportTriggerProject>
+		<ExportSourceRoot>$(MSBuildThisFileDirectory)</ExportSourceRoot>
+		<ExportName>Crawler-DEV-$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</ExportName>
+		<ExportDir>$(MSBuildThisFileDirectory)..\_export\$(ExportName)</ExportDir>
 
-       Place this file in the SOLUTION ROOT (next to .sln). MSBuild
-       imports it automatically into every project at or below this folder,
-       so it covers all projects in sln with no per-project edits.
+		<!-- today's date at midnight: 2026-06-23 00:00:00 -->
+		<ExportTimestamp>$([System.DateTime]::Now.Date.ToString('yyyy-MM-dd HH:mm:ss'))</ExportTimestamp>
+	</PropertyGroup>
 
-       Purpose: delete stale compiler output and incremental-build state
-       before each build, so errors fixed in a previous build cannot come
-       back from leftover output in obj/.
+	<!-- under Export, the build does ONLY our export target (no compile, no bin/obj) -->
+	<PropertyGroup Condition="'$(Configuration)' == 'Export'">
+		<BuildDependsOn>ExportSolution</BuildDependsOn>
+	</PropertyGroup>
 
-       Escape hatch: build with /p:ScrubDisabled=true to skip the scrub
-       for a fast incremental build.
-       ===================================================================== -->
+	<!-- inline C# task: sets timestamps on all files AND folders under a root -->
+	<UsingTask TaskName="SetTimestamps" TaskFactory="RoslynCodeTaskFactory"
+			   AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+		<ParameterGroup>
+			<Root ParameterType="System.String" Required="true" />
+			<Stamp ParameterType="System.String" Required="true" />
+		</ParameterGroup>
+		<Task>
+			<Code Type="Fragment" Language="cs">
+				<![CDATA[
+				var t = System.DateTime.Parse(Stamp);
+				foreach (var f in System.IO.Directory.GetFiles(Root, "*", System.IO.SearchOption.AllDirectories))
+				{
+				    System.IO.File.SetCreationTime(f, t);
+				    System.IO.File.SetLastWriteTime(f, t);
+				    System.IO.File.SetLastAccessTime(f, t);
+				}
+				foreach (var d in System.IO.Directory.GetDirectories(Root, "*", System.IO.SearchOption.AllDirectories))
+				{
+				    System.IO.Directory.SetCreationTime(d, t);
+				    System.IO.Directory.SetLastWriteTime(d, t);
+				    System.IO.Directory.SetLastAccessTime(d, t);
+				}
+				System.IO.Directory.SetCreationTime(Root, t);
+				System.IO.Directory.SetLastWriteTime(Root, t);
+				System.IO.Directory.SetLastAccessTime(Root, t);
+			]]>
+			</Code>
+		</Task>
+	</UsingTask>
 
-  <!-- RECOMMENDED: config-specific scrub.
-       Deletes obj\<Config>\<TFM> and bin\<Config>\<TFM>, then immediately
-       recreates the (empty) intermediate folder. Removes stale compiler
-       output and incremental state but leaves project.assets.json in place,
-       so NuGet does not have to do a full restore every build.
+	<Target Name="ExportSolution"
+			Condition="'$(Configuration)' == 'Export' and '$(MSBuildProjectName)' == '$(ExportTriggerProject)'">
 
-       Runs before PrepareForBuild — the earliest point in the compile
-       pipeline, after restore. This is critical: it must delete BEFORE any
-       target (e.g. SourceLink) resolves a path into obj\Debug\net8.0 and
-       tries to write there. Deleting later (e.g. BeforeTargets=CoreCompile)
-       pulls the folder out from under those targets and causes
-       "Could not find a part of the path" errors.
+		<RemoveDir Directories="$(ExportDir)" />
 
-       The MakeDir is also essential: several targets expect the intermediate
-       folder to already exist and will not create it themselves. -->
-  <Target Name="ScrubIntermediateOutput"
-          BeforeTargets="PrepareForBuild"
-          Condition="'$(ScrubDisabled)' != 'true'">
-    <Message Importance="high"
-             Text="Scrubbing $(IntermediateOutputPath) and $(OutDir) for $(MSBuildProjectName) ($(Configuration))..." />
-    <RemoveDir Directories="$(IntermediateOutputPath);$(OutDir)" />
-    <MakeDir Directories="$(IntermediateOutputPath)" />
-  </Target>
+		<ItemGroup>
+			<ExportFiles Include="$(ExportSourceRoot)**\*"
+						 Exclude="
+                     $(ExportSourceRoot)**\Properties\**\*;
+                     $(ExportSourceRoot)**\dictionaries\**\*;
+                     $(ExportSourceRoot)**\config.private.json;
+                     $(ExportSourceRoot)**\LICENSE.TXT;
+                     $(ExportSourceRoot)**\bin\**\*;
+                     $(ExportSourceRoot)**\obj\**\*;
+                     $(ExportSourceRoot)**\.vs\**\*;
+                     $(ExportSourceRoot)**\.git\**\*;
+                     $(ExportSourceRoot)**\*.user;
+                     $(ExportSourceRoot)_export\**\*;
+                     $(ExportSourceRoot)**\appsettings.Secrets.json;
+                     $(ExportSourceRoot)Notes\**\*" />
+		</ItemGroup>
 
-  <!-- ALTERNATIVE: full scorched-earth nuke.
-       Deletes the ENTIRE obj and bin trees (all configs) including the NuGet
-       restore assets, forcing a complete restore on every build. Slower.
-       This is the literal equivalent of deleting /obj and /bin by hand.
-       To use it: comment out the target above and uncomment this one.
+		<Copy SourceFiles="@(ExportFiles)"
+			  DestinationFiles="@(ExportFiles->'$(ExportDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
 
-  <Target Name="ScrubAll"
-          BeforeTargets="Restore;CollectPackageReferences;CoreCompile"
-          Condition="'$(ScrubDisabled)' != 'true'">
-    <Message Importance="high"
-             Text="Full scrub of obj and bin for $(MSBuildProjectName)..." />
-    <RemoveDir Directories="$(BaseIntermediateOutputPath);$(BaseOutputPath)" />
-  </Target>
-  -->
+		<!-- stamp everything AFTER copy, BEFORE zip, so the zip captures the times -->
+		<SetTimestamps Root="$(ExportDir)" Stamp="$(ExportTimestamp)" />
+
+		<ZipDirectory SourceDirectory="$(ExportDir)"
+					  DestinationFile="$(ExportDir).zip"
+					  Overwrite="true" />
+
+		<Message Importance="high" Text="Solution exported to $(ExportDir).zip" />
+	</Target>
 
 </Project>

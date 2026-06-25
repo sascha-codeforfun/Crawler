@@ -1,4 +1,5 @@
 using System.Text;
+using Crawler.Lexicon;
 using Crawler.SpellCheck;
 using HtmlAgilityPack;
 using Xunit;
@@ -48,9 +49,9 @@ namespace Crawler.Tests
 
 		// ── helpers ───────────────────────────────────────────────────────────
 
-		private static DictionaryBundle Bundle(params string[] acceptedWords)
+		private static Bundle Bundle(params string[] acceptedWords)
 		{
-			var bundle = new DictionaryBundle();
+			var bundle = new Bundle();
 			foreach (var w in acceptedWords)
 			{
 				bundle.SharedUser.Add(w);
@@ -58,8 +59,8 @@ namespace Crawler.Tests
 			return bundle;
 		}
 
-		private static ToolsSpellChecker Checker(DictionaryBundle bundle)
-			=> new(bundle, new Dictionary<string, DictionaryBundle> { ["en"] = bundle },
+		private static ToolsSpellChecker Checker(Bundle bundle)
+			=> new(bundle, new Dictionary<string, Bundle> { ["en"] = bundle },
 				Array.Empty<string>(), Array.Empty<string>());
 
 		private static HtmlNode ScriptNode() => HtmlNode.CreateNode("<script></script>");
@@ -70,7 +71,7 @@ namespace Crawler.Tests
 
 		private BulkScriptScanner.Result RunScan(
 			IReadOnlyList<string> dictionaries,
-			IReadOnlyDictionary<string, DictionaryBundle> bundles)
+			IReadOnlyDictionary<string, Bundle> bundles)
 			=> BulkScriptScanner.Run(
 				_dir, "*.html", _blob, _findings,
 				dictionaries, bundles,
@@ -160,7 +161,7 @@ namespace Crawler.Tests
 		{
 			WriteHtml("p.html", "<html><body><script>var t = \"hallo wolrd\";</script></body></html>");
 
-			var result = RunScan(En, new Dictionary<string, DictionaryBundle> { ["en"] = Bundle("hallo") });
+			var result = RunScan(En, new Dictionary<string, Bundle> { ["en"] = Bundle("hallo") });
 
 			Assert.True(result.Blocks >= 1);
 			Assert.True(result.Findings >= 1);
@@ -171,7 +172,7 @@ namespace Crawler.Tests
 		{
 			WriteHtml("p.html", "<html><body><script>var t = \"hallo wolrd\";</script></body></html>");
 
-			var result = RunScan(new List<string>(), new Dictionary<string, DictionaryBundle>());
+			var result = RunScan(new List<string>(), new Dictionary<string, Bundle>());
 
 			Assert.True(result.Blocks >= 1); // inline body still harvested
 			Assert.Equal(0, result.Findings); // scan early-returns
@@ -183,7 +184,7 @@ namespace Crawler.Tests
 			WriteHtml("p.html",
 				"<html><body><script src=\"x.js\"></script><script>   </script></body></html>");
 
-			var result = RunScan(En, new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() });
+			var result = RunScan(En, new Dictionary<string, Bundle> { ["en"] = Bundle() });
 
 			Assert.Equal(0, result.Blocks);
 			Assert.Equal(0, result.Findings);
@@ -194,7 +195,7 @@ namespace Crawler.Tests
 		{
 			WriteHtml("p.html", "<html><body><p>no scripts here</p></body></html>");
 
-			var result = RunScan(En, new Dictionary<string, DictionaryBundle> { ["en"] = Bundle() });
+			var result = RunScan(En, new Dictionary<string, Bundle> { ["en"] = Bundle() });
 
 			Assert.Equal(0, result.Blocks);
 		}
@@ -215,6 +216,35 @@ namespace Crawler.Tests
 			Assert.Equal(121, trimmed.Length); // 120 chars + ellipsis
 
 			Assert.Equal("short", BulkScriptScanner.TrimLiteral("short")); // under cap unchanged
+		}
+
+		// ── D082: BOM contract on the produced logs ───────────────────────────
+		// The blob (28) and findings (29) writers used new UTF8Encoding(false) before D082,
+		// producing BOM-less files German Excel mis-decoded. Same end-to-end scenario as the
+		// finding tests; here we assert the byte-level encoding on whatever the scan wrote.
+		[Fact]
+		public void Run_OutputLogs_StartWithUtf8Bom()
+		{
+			WriteHtml("p.html", "<html><body><script>var t = \"hallo wolrd\";</script></body></html>");
+			RunScan(En, new Dictionary<string, Bundle> { ["en"] = Bundle("hallo") });
+
+			bool any = false;
+			foreach (var path in new[] { _blob, _findings })
+			{
+				if (!File.Exists(path))
+				{
+					continue;
+				}
+
+				any = true;
+				var bytes = File.ReadAllBytes(path);
+				Assert.True(bytes.Length >= 3, $"'{path}' is shorter than 3 bytes — no BOM.");
+				Assert.Equal((byte)0xEF, bytes[0]);
+				Assert.Equal((byte)0xBB, bytes[1]);
+				Assert.Equal((byte)0xBF, bytes[2]);
+			}
+
+			Assert.True(any, "expected the scan to write at least one output log to assert a BOM on.");
 		}
 	}
 }

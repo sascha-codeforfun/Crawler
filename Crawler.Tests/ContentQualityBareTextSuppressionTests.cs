@@ -1,3 +1,4 @@
+using Crawler.Quality;
 using HtmlAgilityPack;
 using Xunit;
 
@@ -33,7 +34,7 @@ namespace Crawler.Tests
 		public void CheckBareText_NormalVisibleText_Fires()
 		{
 			var doc = LoadDoc("<div>Just some bare text here</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 			Assert.Equal("BARE_TEXT_IN_CONTAINER", issues[0].IssueType);
 		}
@@ -44,7 +45,7 @@ namespace Crawler.Tests
 			// Trim handles leading/trailing whitespace; the visible content
 			// itself drives the finding.
 			var doc = LoadDoc("<div>   bare text   </div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 		}
 
@@ -54,7 +55,7 @@ namespace Crawler.Tests
 			// Block elements like <p> are the correct wrapper for prose —
 			// BARE_TEXT_IN_CONTAINER does not flag this case.
 			var doc = LoadDoc("<div><p>well-wrapped text</p></div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -66,7 +67,7 @@ namespace Crawler.Tests
 			// Trim doesn't strip ZWSP (U+200B), so without #47 this would
 			// fire BARE_TEXT alongside INVISIBLE_CHAR_IN_BODY.
 			var doc = LoadDoc("<div>\u200B\u200B\u200B</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -74,7 +75,7 @@ namespace Crawler.Tests
 		public void CheckBareText_TextAllZwnj_Suppressed()
 		{
 			var doc = LoadDoc("<div>\u200C\u200C</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -82,7 +83,7 @@ namespace Crawler.Tests
 		public void CheckBareText_TextAllZwnbspBom_Suppressed()
 		{
 			var doc = LoadDoc("<div>\uFEFF\uFEFF</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -90,7 +91,7 @@ namespace Crawler.Tests
 		public void CheckBareText_TextAllC1Controls_Suppressed()
 		{
 			var doc = LoadDoc("<div>\u0080\u0090</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -99,7 +100,7 @@ namespace Crawler.Tests
 		{
 			// Whitespace trims away; remaining content is only invisibles.
 			var doc = LoadDoc("<div>   \u200B  \u200C   </div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -112,7 +113,7 @@ namespace Crawler.Tests
 			// finding regardless of accompanying invisibles. INVISIBLE_CHAR
 			// will also fire (different finding); that's fine.
 			var doc = LoadDoc("<div>hello\u200Bworld</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 		}
 
@@ -120,7 +121,7 @@ namespace Crawler.Tests
 		public void CheckBareText_VisibleSurroundedByInvisibles_StillFires()
 		{
 			var doc = LoadDoc("<div>\u200B\u200Bhello\u200B\u200B</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 		}
 
@@ -129,7 +130,7 @@ namespace Crawler.Tests
 		{
 			// Edge of suppression — one visible char keeps the finding alive.
 			var doc = LoadDoc("<div>a\u200B</div>");
-			var issues = ContentQuality.CheckBareText("test.html", doc, DefaultConfig()).ToList();
+			var issues = DefectBareText.CheckBareText("test.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 		}
 	}

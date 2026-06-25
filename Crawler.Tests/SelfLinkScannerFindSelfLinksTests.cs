@@ -1,11 +1,12 @@
 using System.Text;
 using Xunit;
+using Crawler.Urls;
 
 namespace Crawler.Tests
 {
 	/// <summary>
 	/// End-to-end tests for SelfLinkScanner.FindSelfLinks. Each test lays out a
-	/// temp directory with HTML pages, populates UrlCache so filenames resolve to
+	/// temp directory with HTML pages, populates Cache so filenames resolve to
 	/// page URLs, runs the scan, then asserts on the written results log
 	/// (File|FileUrl|LinkFound|ContextSnippet, pipe-delimited, UTF-8 BOM).
 	///
@@ -15,9 +16,9 @@ namespace Crawler.Tests
 	/// helper is covered by SelfLinkScannerSnippetTests; this file covers the scan
 	/// driver and the self-link decision. All fixtures are SYNTHETIC.
 	///
-	/// UrlCache is process-wide static with no reset, so every test uses
+	/// Cache is process-wide static with no reset, so every test uses
 	/// GUID-unique filenames; lookups are keyed by filename and stay isolated.
-	/// In the Logger collection: CrawlIndex/UrlCache log via the static Logger.
+	/// In the Logger collection: CrawlIndex/Cache log via the static Logger.
 	/// </summary>
 	[Collection("Logger")]
 	public class SelfLinkScannerFindSelfLinksTests : IDisposable
@@ -33,7 +34,7 @@ namespace Crawler.Tests
 			_dir = Path.Combine(Path.GetTempPath(), $"SelfLink_{Guid.NewGuid():N}");
 			Directory.CreateDirectory(_dir);
 			Logger.Initialize(Path.Combine(_dir, "test.log"), silent: true);
-			_results = Path.Combine(_dir, "selflinks.log");
+			_results = Path.Combine(_dir, "selflinks");
 		}
 
 		public void Dispose()
@@ -61,19 +62,22 @@ namespace Crawler.Tests
 			var path = Path.Combine(_dir, $"lookup_{Guid.NewGuid():N}.lku");
 			File.WriteAllLines(path, _lookups.Count > 0 ? _lookups : new[] { "_none_|_none_" },
 				Encoding.UTF8);
-			UrlCache.LoadCache(path);
+			Cache.Load(path);
 		}
 
 		private void Scan(List<string>? ignoreQueryKeys = null, int maxDop = 0) =>
 			SelfLinkScanner.FindSelfLinks(_dir, _results,
 				ignoreQueryKeys ?? new List<string>(), "*.html", maxDop, 120, 240);
 
-		private string[] ReportLines() =>
-			File.Exists(_results) ? File.ReadAllLines(_results) : Array.Empty<string>();
+		private string[] ReportLines()
+		{
+			var semicolon = _results + IssueLogWriter.CsvSemicolonSuffix;
+			return File.Exists(semicolon) ? File.ReadAllLines(semicolon) : Array.Empty<string>();
+		}
 
 		private string[] DataRows() => ReportLines().Skip(1).ToArray();
 
-		private static string[] Cols(string line) => line.Split('|');
+		private static string[] Cols(string line) => IssueLogWriter.ParseCsvLine(line, ';');
 
 		// One page at PageUrl with the given anchor markup; returns the data rows.
 		private string[] ScanOnePage(string anchor, string url = PageUrl,

@@ -1,5 +1,6 @@
 using HtmlAgilityPack;
 using Xunit;
+using Crawler.Quality;
 
 namespace Crawler.Tests
 {
@@ -31,379 +32,12 @@ namespace Crawler.Tests
 			return doc;
 		}
 
-		private static HtmlDocument ParseHtml(string html)
-		{
-			var doc = new HtmlDocument();
-			doc.LoadHtml(html);
-			return doc;
-		}
-
 		private static ContentQualityConfig DefaultConfig() => new()
 		{
 			ContentQualityExcerptRadius    = 120,
 			ContentQualityQuoteFullSentence = false,  // keep tests deterministic
 			ContentQualityQuoteMaxExcerpt  = 400,
 		};
-
-		// ── CheckLigatures ────────────────────────────────────────────────────
-
-		[Fact]
-		public void CheckLigatures_NoLigatures_ReturnsEmpty()
-		{
-			var issues = ContentQuality.CheckLigatures("f.html", "The office is open.", DefaultConfig()).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckLigatures_FiLigature_ReturnsOneIssue()
-		{
-			var issues = ContentQuality.CheckLigatures("f.html", "o\uFB01ce", DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Equal("LIGATURE", issues[0].IssueType);
-			Assert.Contains("U+FB01", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckLigatures_FlLigature_ReturnsOneIssue()
-		{
-			var issues = ContentQuality.CheckLigatures("f.html", "o\uFB02oor", DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Contains("U+FB02", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckLigatures_MultipleLigatures_ReturnsAllHits()
-		{
-			// fi and ffl ligatures in same string
-			var issues = ContentQuality.CheckLigatures("f.html", "\uFB01nd the \uFB04uent", DefaultConfig()).ToList();
-			Assert.Equal(2, issues.Count);
-		}
-
-		[Fact]
-		public void CheckLigatures_FilenamePassedThrough()
-		{
-			var issues = ContentQuality.CheckLigatures("page-001.html", "o\uFB01ce", DefaultConfig()).ToList();
-			Assert.Equal("page-001.html", issues[0].Filename);
-		}
-
-		// ── CheckSplitWordAnchors ─────────────────────────────────────────────
-
-		[Fact]
-		public void CheckSplitWordAnchors_NoSplit_ReturnsEmpty()
-		{
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>Click <a href=\"/\">here</a> for more.</p>", DefaultConfig()).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_SplitAfterClose_ReturnsIssue()
-		{
-			// </a> followed by letter then space — classic CMS split
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>Autofil</a>l form</p>", DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Equal("SPLIT_WORD_ANCHOR", issues[0].IssueType);
-			Assert.Contains("l", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_AccentedLetterAfterClose_ReturnsIssue()
-		{
-			// Accented char (U+00C0–U+024F range) after </a>
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>Anmeldung</a>ü form</p>", DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Equal("SPLIT_WORD_ANCHOR", issues[0].IssueType);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_MultipleSplits_ReturnsAll()
-		{
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>Autofil</a>l form and Anmeldung</a>s page</p>", DefaultConfig()).ToList();
-			Assert.Equal(2, issues.Count);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_MultiCharTail_ReturnsIssue()
-		{
-			// #451: the headline case — a MULTI-character orphan. The previous
-			// single-char regex (</a>(X)\s) silently missed this, the common case.
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>Hello Wor</a>ld more</p>", DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Equal("SPLIT_WORD_ANCHOR", issues[0].IssueType);
-			Assert.Contains("ld", issues[0].Detail, StringComparison.Ordinal);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_DigitTail_ReturnsIssue()
-		{
-			// Digit run after </a> — "08</a>15 Uhr": the 15 belongs to the number.
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>08</a>15 Uhr</p>", DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Contains("15", issues[0].Detail, StringComparison.Ordinal);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_CyrillicTail_ReturnsIssue()
-		{
-			// \p{L} covers non-Latin scripts — Cyrillic run after </a>.
-			var issues = ContentQuality.CheckSplitWordAnchors("f.html", "<p>x</a>\u0441\u043f\u0430\u0441\u0438\u0431\u043e here</p>", DefaultConfig()).ToList();
-			Assert.Single(issues);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_LeadingPunctuationTail_DoesNotFire()
-		{
-			// Deferred case: a tail that LEADS with punctuation (".com") must NOT
-			// fire — distinguishing it from a sentence-ending period needs its own
-			// rule (a later change). The run must start with a letter/digit.
-			var dotCom = ContentQuality.CheckSplitWordAnchors("f.html", "<p>ex</a>.com here</p>", DefaultConfig()).ToList();
-			var hyphen = ContentQuality.CheckSplitWordAnchors("f.html", "<p>ex</a>-Event here</p>", DefaultConfig()).ToList();
-			Assert.Empty(dotCom);
-			Assert.Empty(hyphen);
-		}
-
-		[Fact]
-		public void CheckSplitWordAnchors_TrailingSentencePunctuation_DoesNotFire()
-		{
-			// A period or comma after a link is normal typography, not a split.
-			var period = ContentQuality.CheckSplitWordAnchors("f.html", "<p>click <a href=\"/\">here</a>. Next</p>", DefaultConfig()).ToList();
-			var comma  = ContentQuality.CheckSplitWordAnchors("f.html", "<p><a href=\"/\">link</a>, next</p>", DefaultConfig()).ToList();
-			Assert.Empty(period);
-			Assert.Empty(comma);
-		}
-
-		// ── CheckLanguageMismatch ─────────────────────────────────────────────
-
-		[Fact]
-		public void CheckLanguageMismatch_Matching_ReturnsEmpty()
-		{
-			var doc = Doc("<html lang=\"de\"><head><meta name=\"language\" content=\"de\"></head></html>");
-			var issues = ContentQuality.CheckLanguageMismatch("f.html", doc).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckLanguageMismatch_Mismatch_ReturnsIssue()
-		{
-			var doc = Doc("<html lang=\"de\"><head><meta name=\"language\" content=\"en\"></head></html>");
-			var issues = ContentQuality.CheckLanguageMismatch("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Equal("LANGUAGE_MISMATCH", issues[0].IssueType);
-		}
-
-		[Fact]
-		public void CheckLanguageMismatch_SubcodeNormalised_MatchingBaseCode_ReturnsEmpty()
-		{
-			// de-DE vs de should not trigger — both normalise to "de"
-			var doc = Doc("<html lang=\"de-DE\"><head><meta name=\"language\" content=\"de\"></head></html>");
-			var issues = ContentQuality.CheckLanguageMismatch("f.html", doc).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckLanguageMismatch_NoMetaTag_ReturnsEmpty()
-		{
-			var doc = Doc("<html lang=\"de\"><head></head></html>");
-			var issues = ContentQuality.CheckLanguageMismatch("f.html", doc).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckLanguageMismatch_NoHtmlLang_ReturnsEmpty()
-		{
-			var doc = Doc("<html><head><meta name=\"language\" content=\"de\"></head></html>");
-			var issues = ContentQuality.CheckLanguageMismatch("f.html", doc).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckLanguageMismatch_DetailMentionsBothLangs()
-		{
-			var doc = Doc("<html lang=\"de\"><head><meta name=\"language\" content=\"en\"></head></html>");
-			var issues = ContentQuality.CheckLanguageMismatch("f.html", doc).ToList();
-			Assert.Contains("de", issues[0].Detail);
-			Assert.Contains("en", issues[0].Detail);
-		}
-
-		// ── CheckControlCharsInContent (fileset #286) ──────────────────────
-
-		[Fact]
-		public void CheckControlCharsInContent_PlainContent_NoIssues()
-		{
-			var doc = Doc(
-				"<html><head>" +
-				"<title>Normal Title</title>" +
-				"<meta name=\"description\" content=\"A normal description.\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_NewlineInMetaDescription_Flagged()
-		{
-			// The original Czech-page failure: meta description contains a
-			// literal newline character from CMS copy-paste.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"hassle-free\nshopping\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Equal("CONTROL_CHARS_IN_CONTENT", issues[0].IssueType);
-			Assert.Contains("LF", issues[0].Detail);
-			Assert.Contains("description", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_TabInTitle_Flagged()
-		{
-			var doc = Doc("<html><head><title>Two\tTabs</title></head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("TAB", issues[0].Detail);
-			Assert.Contains("title", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_ZeroWidthSpace_Flagged()
-		{
-			// U+200B in a description — invisible to authors, breaks tooling.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"clean\u200Btext\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("U+200B", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_BidiOverride_Flagged()
-		{
-			// U+202E RLO (right-to-left override) — Trojan Source territory.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"keywords\" content=\"safe\u202Eevil\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("U+202E", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_LineSeparator_Flagged()
-		{
-			// Fileset #286b regression: U+2028 LINE SEPARATOR appeared in
-			// real-world CMS-pasted content (HTML byte sequence E2 80 A8)
-			// between paragraphs of meta description text. Invisible to the
-			// CMS author but problematic in downstream tooling.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"section.\u2028 Tip: Start the setup\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("U+2028", issues[0].Detail);
-			Assert.Contains("LINE SEPARATOR", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_ParagraphSeparator_Flagged()
-		{
-			// U+2029 PARAGRAPH SEPARATOR — sibling of U+2028.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"para1\u2029para2\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("U+2029", issues[0].Detail);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_HighUnicode_NotFlagged()
-		{
-			// Legitimate non-ASCII (German umlauts, French accents, Polish
-			// diacritics, Czech háčky) must NOT trigger the check.
-			var doc = Doc(
-				"<html><head>" +
-				"<title>Größe — l'été — Łódź — žluťoučký</title>" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_ContextShowsVisibleMarker()
-		{
-			// The Context field of the emitted issue must replace invisible
-			// chars with visible markers so the operator can see WHERE the
-			// problem is, not just that something happened.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"line1\nline2\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("[LF]", issues[0].Context);
-			Assert.Contains("line1", issues[0].Context);
-			Assert.Contains("line2", issues[0].Context);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_ContextShowsOperatorFriendlyMarker_LineSeparator()
-		{
-			// Obscure codepoints render with the human-readable
-			// kind name AND the codepoint, so non-technical CMS editors can
-			// understand the issue. Real-world scenario:
-			// U+2028 between "section." and " Tip: Start...".
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"section.\u2028 Tip: Start the setup\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			// Marker tells the editor what KIND of invisible character is there.
-			Assert.Contains("[INVISIBLE LINE SEPARATOR U+2028]", issues[0].Context);
-			// Surrounding content is preserved so the editor can locate the issue.
-			Assert.Contains("section.", issues[0].Context);
-			Assert.Contains("Tip: Start", issues[0].Context);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_ContextShowsOperatorFriendlyMarker_ZeroWidthSpace()
-		{
-			// U+200B — a common copy-paste import from Word and PDFs.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"description\" content=\"clean\u200Btext\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("[INVISIBLE ZERO-WIDTH SPACE U+200B]", issues[0].Context);
-		}
-
-		[Fact]
-		public void CheckControlCharsInContent_ContextShowsOperatorFriendlyMarker_BidiControl()
-		{
-			// U+202E RLO — the Trojan Source vector. Operator-friendly marker
-			// makes the security concern visible without requiring the editor
-			// to know what U+202E means.
-			var doc = Doc(
-				"<html><head>" +
-				"<meta name=\"keywords\" content=\"safe\u202Eevil\">" +
-				"</head></html>");
-			var issues = ContentQuality.CheckControlCharsInContent("f.html", doc).ToList();
-			Assert.Single(issues);
-			Assert.Contains("[INVISIBLE BIDI CONTROL U+202E]", issues[0].Context);
-		}
-
-		private static HtmlAgilityPack.HtmlDocument HtmlDoc(string bodyText)
-		{
-			var doc = new HtmlAgilityPack.HtmlDocument();
-			doc.LoadHtml($"<html><body><p>{bodyText}</p></body></html>");
-			return doc;
-		}
 
 		// ── CheckQuotes — system mixing ───────────────────────────────────────
 
@@ -413,7 +47,7 @@ namespace Crawler.Tests
 			// Only German-double openers — must be in a block element for per-block detection
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<p>„Hallo”</p>");
-			var issues = ContentQuality.CheckQuotes("f.html", doc, QuoteConfig()).ToList();
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
 		}
 
@@ -423,7 +57,7 @@ namespace Crawler.Tests
 			// German and English openers in the same block
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<p>\u201EHallo\u201C \u201CHello\u201D</p>");
-			var issues = ContentQuality.CheckQuotes("f.html", doc, QuoteConfig()).ToList();
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
 		}
 
@@ -433,7 +67,7 @@ namespace Crawler.Tests
 			// Single-quote system coexisting with double — should NOT flag as mix
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<p>„Hallo” and ‘Hi’</p>");
-			var issues = ContentQuality.CheckQuotes("f.html", doc, QuoteConfig()).ToList();
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
 		}
 
@@ -446,7 +80,7 @@ namespace Crawler.Tests
 			// Both should flag their own mix only if they have both systems internally.
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<p>\u201EHallo\u201C</p><li>\u201CHello\u201D</li>");
-			var issues = ContentQuality.CheckQuotes("f.html", doc, QuoteConfig()).ToList();
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
 			// Neither block has a mix internally — no QUOTE_SYSTEM_MIX expected.
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
 		}
@@ -457,7 +91,7 @@ namespace Crawler.Tests
 			// Both systems within one <p> — should flag.
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<p>\u201EHallo\u201C \u201CHello\u201D</p>");
-			var issues = ContentQuality.CheckQuotes("f.html", doc, QuoteConfig()).ToList();
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
 		}
 
@@ -467,7 +101,43 @@ namespace Crawler.Tests
 			// Text directly in <div> (not a block element) is not quote-checked.
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<div>\u201EHallo\u201C \u201CHello\u201D</div>");
-			var issues = ContentQuality.CheckQuotes("f.html", doc, QuoteConfig()).ToList();
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
+		}
+
+		[Fact]
+		public void CheckQuotes_SingleDeclaredLanguage_AnchorsSystemCheck()
+		{
+			// A page declaring exactly one language resolves to a single-element
+			// language set, so the quote system check is anchored to that language.
+			// Here <html lang="de"> makes the German „…“ pair correct (no mix, no
+			// wrong-close), exercising the single-language resolution path where
+			// pageLanguage is the declared language rather than null.
+			var doc = new HtmlAgilityPack.HtmlDocument();
+			doc.LoadHtml("<html lang=\"de\"><body><p>\u201EHallo\u201C</p></body></html>");
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
+		}
+
+		[Fact]
+		public void CheckQuotes_BlockUnderNoscript_Excluded()
+		{
+			// Block elements whose parent is <script>, <style>, or <noscript> are
+			// filtered out of the quote check (line: ParentNode.Name is not
+			// script/style/noscript). HtmlAgilityPack parses <noscript> as real
+			// markup, so a <p> directly inside it is surfaced as a child element
+			// with ParentNode.Name == "noscript" — the shape that drives the
+			// exclusion's false branch. The <p> carries both German and English
+			// openers; were it checked it would flag a system mix, so its absence
+			// confirms the exclusion fired. (Well-formed html/body wrapper matters:
+			// a bare <noscript> fragment can parse differently.)
+			var doc = new HtmlAgilityPack.HtmlDocument();
+			doc.LoadHtml(
+				"<!DOCTYPE html><html lang=\"de\"><body>" +
+				"<noscript><p>\u201EHallo\u201C \u201CHello\u201D</p></noscript>" +
+				"</body></html>");
+			var issues = Quotes.Check("f.html", doc, QuoteConfig()).ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_SYSTEM_MIX");
 		}
 
@@ -479,7 +149,7 @@ namespace Crawler.Tests
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<div>Bare text here</div>");
 			var config = DefaultConfig();
-			var issues = ContentQuality.CheckBareText("f.html", doc, config).ToList();
+			var issues = DefectBareText.CheckBareText("f.html", doc, config).ToList();
 			Assert.Contains(issues, i => i.IssueType == "BARE_TEXT_IN_CONTAINER");
 		}
 
@@ -489,7 +159,7 @@ namespace Crawler.Tests
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<div><p>Proper paragraph</p></div>");
 			var config = DefaultConfig();
-			var issues = ContentQuality.CheckBareText("f.html", doc, config).ToList();
+			var issues = DefectBareText.CheckBareText("f.html", doc, config).ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "BARE_TEXT_IN_CONTAINER");
 		}
 
@@ -499,7 +169,7 @@ namespace Crawler.Tests
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<div>   \n   <p>Content</p></div>");
 			var config = DefaultConfig();
-			var issues = ContentQuality.CheckBareText("f.html", doc, config).ToList();
+			var issues = DefectBareText.CheckBareText("f.html", doc, config).ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "BARE_TEXT_IN_CONTAINER");
 		}
 
@@ -509,7 +179,7 @@ namespace Crawler.Tests
 			var doc = new HtmlAgilityPack.HtmlDocument();
 			doc.LoadHtml("<section>Bare text in section</section>");
 			var config = DefaultConfig();
-			var issues = ContentQuality.CheckBareText("f.html", doc, config).ToList();
+			var issues = DefectBareText.CheckBareText("f.html", doc, config).ToList();
 			Assert.Contains(issues, i => i.IssueType == "BARE_TEXT_IN_CONTAINER");
 		}
 
@@ -519,7 +189,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_GermanDoubleCorrect_NoIssue()
 		{
 			// „Hallo“ — correct German pair: U+201E opens, U+201C closes (66-Zeichen oben)
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u201EHallo\u201C", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u201EHallo\u201C", DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -527,7 +197,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_EnglishDoubleCorrect_NoIssue()
 		{
 			// "Hello" — correct English double pair
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u201CHello\u201D", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u201CHello\u201D", DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -535,7 +205,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_GermanGuillemetCorrect_NoIssue()
 		{
 			// «Hallo» — correct German guillemet pair (« opens, » closes)
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u00ABHallo\u00BB", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u00ABHallo\u00BB", DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -543,7 +213,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_GermanSingleCorrect_NoIssue()
 		{
 			// ‚Hallo' — correct German single pair
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u201AHallo\u2019", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u201AHallo\u2019", DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -553,7 +223,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_GermanOpenerWrongCloser_ReportsWrongClose()
 		{
 			// „ opened with German-double but closed with » (Guillemet closer)
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u201EHallo\u00BB", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u201EHallo\u00BB", DefaultConfig()).ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
 		}
 
@@ -561,10 +231,76 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_WrongClose_DetailMentionsBothSystems()
 		{
 			// „ opened with German-double but closed with » (Guillemet closer)
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u201EHallo\u00BB", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u201EHallo\u00BB", DefaultConfig()).ToList();
 			var wrongClose = issues.FirstOrDefault(i => i.IssueType == "QUOTE_WRONG_CLOSE");
 			Assert.NotNull(wrongClose);
 			Assert.Contains("German-double", wrongClose!.Detail);
+		}
+
+		// ── D060 — U+201E…U+201D resolves by page language ────────────────────
+		// „…” is correct for the Slavic-double languages (pl/ro/bg/cs) and wrong for
+		// German (which closes „…“ with U+201C). The shared U+201E opener is
+		// disambiguated by page language, so the same byte sequence is accepted or
+		// flagged depending only on the language passed.
+
+		[Fact]
+		public void CheckQuotePairing_De_LowNineThenHighNine_ReportsWrongClose()
+		{
+			// REGRESSION LOCK: „Begriff” on a de page → U+201D is the wrong closer
+			// (German closes with U+201C). Must stay flagged after Slavic-double exists.
+			var issues = Quotes.CheckPairing(
+				"f.html", "\u201EBegriff\u201D", DefaultConfig(), "de").ToList();
+			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
+		}
+
+		[Fact]
+		public void CheckQuotePairing_Undeclared_LowNineThenHighNine_ReportsWrongClose()
+		{
+			// No page language (empty default → null): the shared opener falls back to
+			// German-double, so „Begriff” still flags. Undeclared pages are not silently
+			// granted Slavic typography.
+			var issues = Quotes.CheckPairing(
+				"f.html", "\u201EBegriff\u201D", DefaultConfig(), null).ToList();
+			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
+		}
+
+		[Fact]
+		public void CheckQuotePairing_De_CorrectGerman_NoWrongClose()
+		{
+			// „Begriff“ on a de page is correct (U+201C closer) → clean.
+			var issues = Quotes.CheckPairing(
+				"f.html", "\u201EBegriff\u201C", DefaultConfig(), "de").ToList();
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
+		}
+
+		[Theory]
+		[InlineData("pl")]
+		[InlineData("ro")]
+		[InlineData("bg")]
+		[InlineData("cs")]
+		public void CheckQuotePairing_SlavicLanguage_LowNineThenHighNine_Clean(string language)
+		{
+			// „Wyraz” is correct typography for each Slavic-double language → no
+			// QUOTE_WRONG_CLOSE and no QUOTE_UNMATCHED.
+			var issues = Quotes.CheckPairing(
+				"f.html", "\u201EWyraz\u201D", DefaultConfig(), language).ToList();
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_UNMATCHED");
+		}
+
+		[Fact]
+		public void CheckQuotePairing_Pl_GermanStyleClose_IsNotClean()
+		{
+			// The inverse guard: on a pl page, „Wyraz“ closing with U+201C is NOT
+			// Polish typography. U+201C is not a Slavic-double closer (Slavic closes
+			// with U+201D) and is itself an English-double opener, so it is pushed
+			// rather than consumed — the block surfaces as unmatched openers, not a
+			// wrong-closer. Either way the wrong typography is detected (not clean);
+			// this confirms the pl anchor does not blanket-accept any closer under „.
+			var issues = Quotes.CheckPairing(
+				"f.html", "\u201EWyraz\u201C", DefaultConfig(), "pl").ToList();
+			Assert.Contains(issues, i => i.IssueType == "QUOTE_UNMATCHED");
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_CLOSE");
 		}
 
 		// ── CheckQuotePairing — wrong opener (closer with no opener) ──────────
@@ -573,7 +309,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_CloserWithNoOpener_ReportsWrongOpen()
 		{
 			// " with no preceding opener — straight quote used as opener
-			var issues = ContentQuality.CheckQuotePairing("f.html", "Hello \u201D world", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "Hello \u201D world", DefaultConfig()).ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 		}
 
@@ -583,7 +319,7 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_ApostropheAfterLetter_NotFlaggedAsCloser()
 		{
 			// geht's — U+2019 between letters is apostrophe, not a quote closer
-			var issues = ContentQuality.CheckQuotePairing("f.html", "Das geht\u2019s nicht", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "Das geht\u2019s nicht", DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -595,7 +331,7 @@ namespace Crawler.Tests
 			// when the page language is "de"; falls back to Rule 2 (between
 			// letters) otherwise — but 'ner has a space before so Rule 2 does
 			// not save it. The de profile MUST be active to pass.
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", "Was ist mit \u2018ner Limonade?", DefaultConfig(), "de").ToList();
 			Assert.Empty(issues);
 		}
@@ -604,7 +340,20 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_EnglishContraction_NotFlagged()
 		{
 			// funktioniert's — U+2019 + s is a configured elision
-			var issues = ContentQuality.CheckQuotePairing("f.html", "So einfach funktioniert\u2019s:", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "So einfach funktioniert\u2019s:", DefaultConfig()).ToList();
+			Assert.Empty(issues);
+		}
+
+		[Fact]
+		public void CheckQuotePairing_ElisionSuffixAtEndOfText_NotFlagged()
+		{
+			// Boundary-after Rule 1a: the matched suffix is satisfied by the
+			// end-of-text arm (i + 1 + e.Length >= text.Length) rather than the
+			// non-letter-after arm. Here "'s" ends the string with nothing after it,
+			// so the boundary is end-of-text — the elision is still recognised and
+			// the apostrophe is not treated as an opening single quote.
+			var issues = Quotes.CheckPairing(
+				"f.html", "So einfach funktioniert\u2019s", DefaultConfig(), "de").ToList();
 			Assert.Empty(issues);
 		}
 
@@ -613,7 +362,7 @@ namespace Crawler.Tests
 		{
 			// 'a good time' — closer preceded by 'e' but followed by space, not a letter
 			// So it should NOT be treated as apostrophe
-			var issues = ContentQuality.CheckQuotePairing("f.html", "\u2018a good time\u2019", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "\u2018a good time\u2019", DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -621,7 +370,33 @@ namespace Crawler.Tests
 		public void CheckQuotePairing_RightSingleAfterSpace_FlaggedAsCloser()
 		{
 			// U+2019 not preceded by a letter — treated as a closer with no opener
-			var issues = ContentQuality.CheckQuotePairing("f.html", "Hello \u2019 world", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "Hello \u2019 world", DefaultConfig()).ToList();
+			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
+		}
+
+		[Fact]
+		public void CheckQuotePairing_EmptySuffixEntry_GuardedOut_DoesNotMatchEverything()
+		{
+			// Adversarial config: a malformed elision profile containing an empty
+			// suffix string. The Rule 1a guard (e.Length > 0) must skip the empty
+			// entry. Without that guard, "".Equals("") would be true at every
+			// apostrophe whose following char is a non-letter or end-of-text, turning
+			// EVERY such apostrophe into a false elision and silently swallowing real
+			// findings. Here a lone U+2019 between spaces must still flag as
+			// QUOTE_WRONG_OPEN — proving the empty entry was guarded out and the
+			// legitimate "s" entry (which does not match before a space) did not fire.
+			var cfg = DefaultConfig();
+			cfg.ContentQualityApostropheElisions = new(StringComparer.OrdinalIgnoreCase)
+			{
+				["_default"] = new ApostropheElisionProfile
+				{
+					ApostropheChars = ['\u2018', '\u2019'],
+					SuffixElisions = ["", "s"],
+				},
+			};
+
+			var issues = Quotes.CheckPairing(
+				"f.html", "Hello \u2019 world", cfg, "xx").ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 		}
 
@@ -638,7 +413,7 @@ namespace Crawler.Tests
 			// The fr profile's PrefixElisions list resolves "l" before the
 			// apostrophe → recognised as elision, stack stays clean.
 			var text  = "\u00ABla confirmation de l\u2019acc\u00E8s en ligne\u00BB";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, DefaultConfig(), "fr").ToList();
 			Assert.Empty(issues);
 		}
@@ -650,7 +425,7 @@ namespace Crawler.Tests
 			// prefixes (l', d', n', s'), all inside guillemets. Stack must close
 			// cleanly with no QUOTE_WRONG_CLOSE or QUOTE_WRONG_OPEN.
 			var text = "\u00ABl\u2019acc\u00E8s n\u2019est pas s\u2019il d\u2019un \u00E9chec\u00BB";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, DefaultConfig(), "fr").ToList();
 			Assert.Empty(issues);
 		}
@@ -661,7 +436,7 @@ namespace Crawler.Tests
 			// Page language "xx" is not in the profile dictionary; "_default"
 			// is used. The default profile has empty elision lists, but Rule 2
 			// (between-letters) still catches the common case.
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", "Das geht\u2019s nicht", DefaultConfig(), "xx").ToList();
 			Assert.Empty(issues);
 		}
@@ -677,7 +452,7 @@ namespace Crawler.Tests
 			// both letters → between-letters apostrophe → recognised correctly.
 			// The test confirms Rule 1b's word-anchor doesn't accidentally match
 			// AND that Rule 2 catches the apostrophe regardless (no false positive).
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", "Le tablel\u2019art existe", DefaultConfig(), "fr").ToList();
 			Assert.Empty(issues);
 		}
@@ -690,7 +465,7 @@ namespace Crawler.Tests
 			// would treat the apostrophe as a closer, producing QUOTE_WRONG_CLOSE.
 			// Test uses _default (no language) to confirm the rule itself.
 			var text = "\u00ABl\u2019acc\u00E8s\u00BB";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
@@ -704,52 +479,80 @@ namespace Crawler.Tests
 			// after is not symmetric). With the fr profile active, suffix list
 			// is empty and the German "ner" entry is in the de profile only.
 			// Expected: U+2018 treated as opener, no closer in block → unmatched.
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", "Was ist mit \u2018ner Limonade?", DefaultConfig(), "fr").ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_UNMATCHED");
 		}
 
-		// ── CheckQuotePairing — verification pass (fileset #285) ──────────────
-		// Second-pass proximity verification downgrades flags to QUOTE_AMBIGUOUS
-		// when the offending character can be paired cleanly under stricter
-		// apostrophe rules. Original tier preserved when the verification pass
-		// cannot resolve the flag.
-
-		private static ContentQualityConfig DefaultConfigWithVerification(bool enabled = true)
+		[Fact]
+		public void CheckQuotePairing_DefaultProfileSelected_WhenLanguageAbsent()
 		{
+			// Profile resolution: when the elision dictionary HAS a "_default"
+			// entry but no entry for the page language, that "_default" profile is
+			// used (not the built-in empty profile). Page language "xx" is absent;
+			// the "_default" suffix list carries "nem", so the front-elision
+			// 'nem (apostrophe, "nem", word boundary) is recognised via Rule 1a
+			// and suppressed → clean. With the built-in empty profile the suffix
+			// would not match and U+2018 would surface, so a clean result proves
+			// the "_default" branch was taken.
 			var cfg = DefaultConfig();
-			cfg.CheckQuotePairingVerification = enabled;
-			return cfg;
+			cfg.ContentQualityApostropheElisions = new(StringComparer.OrdinalIgnoreCase)
+			{
+				["_default"] = new ApostropheElisionProfile
+				{
+					ApostropheChars = ['\u2018', '\u2019'],
+					SuffixElisions = ["nem", "ner", "ne"],
+				},
+			};
+
+			var issues = Quotes.CheckPairing(
+				"f.html", "mit \u2018nem Auto", cfg, "xx").ToList();
+			Assert.Empty(issues);
+		}
+
+		// ── CheckQuotePairing — elision (boundary-after) & genuine flags ──────
+		// The detector classifies an apostrophe-char as an elision (skip) only
+		// when a suffix entry matches up to a word boundary, a prefix rule fires,
+		// or it sits between letters. A quoted word that merely STARTS with a
+		// suffix letter ('show → 's'+how) is not an elision, so its opening quote
+		// pairs normally and produces no finding. (The former second-pass
+		// verification that downgraded such cases to QUOTE_AMBIGUOUS was removed:
+		// the source classification is now correct, leaving nothing to downgrade.)
+
+		[Fact]
+		public void CheckQuotePairing_EnglishSingleQuotedPhrase_PairsCleanly()
+		{
+			// 'show password': 's' is a suffix entry, but "show" continues with
+			// letters after it, so boundary-after refuses the elision. The opening
+			// U+2018 is a real opener and pairs with the closing U+2019 → no
+			// finding. (Previously eaten as elision, orphan flagged, softened to
+			// AMBIGUOUS; now fixed at the source.)
+			var text = "Use the \u2018show password\u2019 function.";
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "en").ToList();
+			Assert.Empty(issues);
 		}
 
 		[Fact]
-		public void CheckQuotePairing_EnglishSingleQuotedPhrase_DowngradedToAmbiguous()
+		public void CheckQuotePairing_OpeningQuoteBeforeSuffixWord_PairsCleanly()
 		{
-			// The false positive that motivated fileset #285: 'show password' in
-			// English text. Cheap pass eats opening U+2018 as elision (because
-			// 's' is an English suffix), then flags the closing U+2019 as
-			// QUOTE_WRONG_OPEN. Verification pass uses Rule 1a-strict (letter-
-			// before required), correctly classifies U+2018 as opener, pairs it
-			// with U+2019 → flag is downgraded to QUOTE_AMBIGUOUS.
-			var text = "Use the \u2018show password\u2019 function.";
-			var issues = ContentQuality.CheckQuotePairing(
-				"f.html", text, DefaultConfigWithVerification(), "en").ToList();
-			Assert.Single(issues);
-			Assert.Equal("QUOTE_AMBIGUOUS", issues[0].IssueType);
-			Assert.Contains("QUOTE_WRONG_OPEN", issues[0].Detail);
-			Assert.Contains("resolved by proximity", issues[0].Detail);
+			// 'Request money' / 'Show my QR code': opening U+2018 before a word
+			// starting with a suffix letter ('re'quest, 's'how). Letters follow
+			// the suffix, so not an elision → both open as quotes and pair → no
+			// finding.
+			var text = "click \u2018Request money\u2019 then \u2018Show my QR code\u2019.";
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "en").ToList();
+			Assert.Empty(issues);
 		}
 
 		[Fact]
-		public void CheckQuotePairing_VerificationDisabled_KeepsOriginalType()
+		public void CheckQuotePairing_ContractionAndQuotedPhrase_NeitherFlagged()
 		{
-			// Same text as the test above, but verification disabled. Expect
-			// the original QUOTE_WRONG_OPEN flag with no downgrade.
-			var text = "Use the \u2018show password\u2019 function.";
-			var issues = ContentQuality.CheckQuotePairing(
-				"f.html", text, DefaultConfigWithVerification(enabled: false), "en").ToList();
-			Assert.Single(issues);
-			Assert.Equal("QUOTE_WRONG_OPEN", issues[0].IssueType);
+			// The das-neue card verbatim: "you're" (U+2019 between letters) plus a
+			// clean 'show password' pair. Boundary-after + Rule 2 mean neither the
+			// contraction nor the quoted phrase produces a finding.
+			var text = "Whether you\u2019re surfing, use the \u2018show password\u2019 function.";
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "en").ToList();
+			Assert.Empty(issues);
 		}
 
 		[Fact]
@@ -760,49 +563,33 @@ namespace Crawler.Tests
 			// verification enabled — proximity pairing finds no pair → no
 			// downgrade. Construct: closer at start of block, no opener anywhere.
 			var text = "\u2019 stray closer with nothing before it.";
-			var issues = ContentQuality.CheckQuotePairing(
-				"f.html", text, DefaultConfigWithVerification(), "en").ToList();
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "en").ToList();
 			Assert.Single(issues);
 			Assert.Equal("QUOTE_WRONG_OPEN", issues[0].IssueType);
 		}
 
 		[Fact]
-		public void CheckQuotePairing_PartialResolution_MixedTypes()
+		public void CheckQuotePairing_CleanPairBesideGenuineOrphan_OnlyOrphanFlagged()
 		{
-			// Block with two independent flag triggers: one that the verification
-			// pass can resolve, one it cannot. Expected: a mix — one
-			// QUOTE_AMBIGUOUS and one high-confidence type.
-			// First trigger: 'show password' → verification pairs U+2018/U+2019
-			//                cleanly → AMBIGUOUS
-			// Second trigger: stray U+201D closer at end → no opener → stays as
-			//                QUOTE_WRONG_OPEN (English-double has no opener here
-			//                because U+201C never appeared)
+			// 'show password' pairs cleanly (boundary-after); an unrelated stray
+			// U+201D at the end has no English-double opener → exactly one
+			// finding, the genuine orphan.
 			var text = "Use \u2018show password\u2019 here. Also \u201D stray.";
-			var issues = ContentQuality.CheckQuotePairing(
-				"f.html", text, DefaultConfigWithVerification(), "en").ToList();
-			Assert.Equal(2, issues.Count);
-			Assert.Contains(issues, i => i.IssueType == "QUOTE_AMBIGUOUS");
-			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "en").ToList();
+			Assert.Single(issues);
+			Assert.Equal("QUOTE_WRONG_OPEN", issues[0].IssueType);
 		}
 
 		[Fact]
-		public void CheckQuotePairing_ProximityPairingRespectsSystemBoundaries()
+		public void CheckQuotePairing_SuffixWordAcrossSystems_NoSpuriousPair()
 		{
-			// U+2018 (English-single opener) paired against U+201D (English-
-			// DOUBLE closer) should NOT pair — different systems. The cheap
-			// pass would flag the U+201D as orphan; the verification pass also
-			// finds no pair (its per-system stack for English-double is empty)
-			// → flag stays high-confidence QUOTE_WRONG_OPEN.
-			// The "s" suffix swallows the U+2018 in the cheap pass (same as
-			// the 'show password' case) — but Rule 1a-strict in the verification
-			// pass correctly treats U+2018 as an English-single opener with no
-			// matching English-single closer in the block. So neither U+2018 nor
-			// U+201D end up paired.
+			// U+2018 (English-single opener) ... U+201D (English-DOUBLE closer):
+			// different systems, must not pair. "something" starts with 's' but
+			// continues with letters, so boundary-after treats U+2018 as a real
+			// opener (left unmatched) and U+201D as an orphan closer — both flag,
+			// and neither is AMBIGUOUS (that tier no longer exists).
 			var text = "Open \u2018something here\u201D close.";
-			var issues = ContentQuality.CheckQuotePairing(
-				"f.html", text, DefaultConfigWithVerification(), "en").ToList();
-			// Two flags expected from the cheap pass (or at least one for the
-			// stray U+201D); whichever fire must NOT be QUOTE_AMBIGUOUS.
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "en").ToList();
 			Assert.NotEmpty(issues);
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_AMBIGUOUS");
 		}
@@ -815,7 +602,7 @@ namespace Crawler.Tests
 			// Multi-sentence German quote — stack must NOT reset at sentence boundaries.
 			// Per-block scoping handles isolation — the block IS the natural boundary.
 			var text = "\u201EErster Satz. Zweiter Satz. Dritter Satz.\u201C";
-			var issues = ContentQuality.CheckQuotePairing("f.html", text, DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -826,7 +613,7 @@ namespace Crawler.Tests
 		{
 			// Per-block scoping means any unmatched opener is reported regardless of position.
 			// The 500-char distance cutoff was removed — block boundary is the natural limit.
-			var issues = ContentQuality.CheckQuotePairing("f.html", "Some text \u201ENo closer here", DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", "Some text \u201ENo closer here", DefaultConfig()).ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_UNMATCHED");
 		}
 
@@ -835,431 +622,8 @@ namespace Crawler.Tests
 		{
 			// Even an opener far from the end of a long block is reported — no distance cutoff.
 			var farText = "\u201EOpener" + new string('x', 600);
-			var issues = ContentQuality.CheckQuotePairing("f.html", farText, DefaultConfig()).ToList();
+			var issues = Quotes.CheckPairing("f.html", farText, DefaultConfig()).ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_UNMATCHED");
-		}
-
-		// ── CheckMisplacedAnchors — MISPLACED_ANCHOR_EMPTY ─────────────────────
-
-		[Fact]
-		public void CheckMisplacedAnchors_EmptyAnchor_ReturnsEmptyIssue()
-		{
-			var html   = "<p><a href=\"/x\"></a>text</p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_WhitespaceOnlyAnchor_ReturnsEmptyIssue()
-		{
-			var html   = "<p><a href=\"/x\">   </a>text</p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_AnchorWithEmptyChildElements_ReturnsEmptyIssue()
-		{
-			// Anchor contains only empty inline elements — no visible text anywhere
-			var html   = "<p><a href=\"/x\"><span><b></b></span></a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_AnchorWithText_NoEmptyIssue()
-		{
-			var html   = "<p><a href=\"/x\">Click here</a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			Assert.DoesNotContain(issues, i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_EmptyAnchor_DetailContainsHref()
-		{
-			var html   = "<p><a href=\"/target\"></a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			var issue  = issues.FirstOrDefault(i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-			Assert.NotNull(issue);
-			Assert.Contains("/target", issue!.Detail);
-		}
-
-		// ── CheckMisplacedAnchors — ADJACENT_ANCHOR (was MISPLACED_ANCHOR_SPLIT, #452) ──
-		// All ADJACENT_ANCHOR tests must opt the detector in via the new gate
-		// (AnchorDetection.DetectAdjacent), which defaults FALSE in production —
-		// adjacency is a structural fact, not a verdict, and most sites opt in only
-		// after deciding their design rules it in. DefaultConfig() reflects the
-		// production default; each test that exercises the detector enables the gate
-		// explicitly so the dependency is visible on the test surface, not hidden in
-		// a shared helper.
-
-		private static ContentQualityConfig ConfigWithAdjacentOn()
-		{
-			var cfg = DefaultConfig();
-			cfg.AnchorDetection.DetectAdjacent = true;
-			return cfg;
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_AdjacentAnchorsNoSeparator_ReturnsSplitIssue()
-		{
-			// Two anchors directly adjacent — no whitespace between closing and opening tag
-			var html   = "<h3><a href=\"/x\">And</a><a href=\"/x\">roid</a></h3>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "ADJACENT_ANCHOR");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_AdjacentAnchorsDifferentHref_ReturnsSplitIssue()
-		{
-			// Different hrefs — structural defect regardless of href
-			var html   = "<p><a href=\"/a\">Foo</a><a href=\"/b\">Bar</a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "ADJACENT_ANCHOR");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_AnchorsWithSpaceBetween_NoSplitIssue()
-		{
-			var html   = "<p><a href=\"/a\">Foo</a> <a href=\"/b\">Bar</a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn()).ToList();
-			Assert.DoesNotContain(issues, i => i.IssueType == "ADJACENT_ANCHOR");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_ThreeAdjacentAnchors_ReportsTwoPairs()
-		{
-			// A+B adjacent and B+C adjacent — two split issues
-			var html   = "<p><a href=\"/x\">A</a><a href=\"/x\">B</a><a href=\"/x\">C</a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn())
-				.Where(i => i.IssueType == "ADJACENT_ANCHOR").ToList();
-			Assert.Equal(2, issues.Count);
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_EmptyMiddleAnchorWithSplits_ReportsBothTypes()
-		{
-			// Mirrors the real-world pattern: text anchor + empty anchor + text anchor,
-			// all adjacent, same href.
-			var html   = "<h3>" +
-			             "<a href=\"/x\">And</a>" +
-			             "<a href=\"/x\"></a>" +
-			             "<a href=\"/x\">roid</a>" +
-			             "</h3>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-			Assert.Contains(issues, i => i.IssueType == "ADJACENT_ANCHOR");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_FilenamePassedThrough()
-		{
-			var html   = "<p><a href=\"/x\"></a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("page-042.html", ParseHtml(html), ConfigWithAdjacentOn()).ToList();
-			Assert.All(issues, i => Assert.Equal("page-042.html", i.Filename));
-		}
-
-		// ── #452 gate + post-filter behavior ─────────────────────────────────
-
-		[Fact]
-		public void CheckMisplacedAnchors_AdjacentGateOff_NoFindings()
-		{
-			// Default DefaultConfig() leaves AnchorDetection.DetectAdjacent = false.
-			// The same input that fires under ConfigWithAdjacentOn() must produce
-			// zero ADJACENT_ANCHOR findings here. Guards the default-off contract.
-			var html   = "<h3><a href=\"/x\">And</a><a href=\"/x\">roid</a></h3>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			Assert.DoesNotContain(issues, i => i.IssueType == "ADJACENT_ANCHOR");
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_AdjacentGateOff_EmptyStillFires()
-		{
-			// The gate scopes ADJACENT only — MISPLACED_ANCHOR_EMPTY is not affected
-			// and must still fire under the default config.
-			var html   = "<p><a href=\"/x\"></a></p>";
-			var issues = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), DefaultConfig()).ToList();
-			Assert.Contains(issues, i => i.IssueType == "MISPLACED_ANCHOR_EMPTY");
-		}
-
-		// ── #431: ADJACENT_ANCHOR excerpt centres on the </a><a boundary, not the
-		//          first anchor's OuterHtml start. Regression guard for the case
-		//          where a long body (e.g. an inline SVG) inside the first anchor
-		//          pushed the split out of the windowed excerpt, leaving the
-		//          operator a wall of markup with no visible split. Synthetic
-		//          fixtures only.
-
-		[Fact]
-		public void CheckMisplacedAnchors_SplitBehindLongBody_ExcerptStillShowsSplit()
-		{
-			// First anchor carries a long inner body (stand-in for a big inline SVG
-			// path) so its OuterHtml start sits far from the split. Pre-#431 the
-			// excerpt centred on that start and the </a><a boundary fell outside the
-			// window; post-#431 it centres on the boundary so the split is in frame.
-			var longBody = new string('x', 600);
-			var html = $"<div><a href=\"/a\">{longBody}First</a><a href=\"/b\">Second</a></div>";
-			var issue = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn())
-				.First(i => i.IssueType == "ADJACENT_ANCHOR");
-
-			Assert.Contains("</a><a", issue.Context, StringComparison.Ordinal);
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_SplitBehindLongBody_ExcerptShowsBothAnchorTexts()
-		{
-			var longBody = new string('x', 600);
-			var html = $"<div><a href=\"/a\">{longBody}First</a><a href=\"/b\">Second</a></div>";
-			var issue = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn())
-				.First(i => i.IssueType == "ADJACENT_ANCHOR");
-
-			// Both anchors' text sit adjacent to the boundary, so a boundary-centred
-			// window shows both — the operator can read what was split.
-			Assert.Contains("First", issue.Context, StringComparison.Ordinal);
-			Assert.Contains("Second", issue.Context, StringComparison.Ordinal);
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_SplitBehindLongBody_LeadingEllipsisWhenClippedLeft()
-		{
-			// Long left body guarantees the window is clipped on the left → leading …
-			var longBody = new string('x', 600);
-			var html = $"<div><a href=\"/a\">{longBody}First</a><a href=\"/b\">Second</a></div>";
-			var issue = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn())
-				.First(i => i.IssueType == "ADJACENT_ANCHOR");
-
-			Assert.StartsWith("\u2026", issue.Context);
-		}
-
-		[Fact]
-		public void CheckMisplacedAnchors_ShortSplit_NoEllipsisWhenNotClipped()
-		{
-			// Whole construct fits within the cap → no clipping → no … on either end.
-			var html = "<div><a href=\"/a\">Foo</a><a href=\"/b\">Bar</a></div>";
-			var issue = ContentQuality.CheckMisplacedAnchors("f.html", ParseHtml(html), ConfigWithAdjacentOn())
-				.First(i => i.IssueType == "ADJACENT_ANCHOR");
-
-			Assert.DoesNotContain("\u2026", issue.Context);
-			Assert.Contains("</a><a", issue.Context, StringComparison.Ordinal);
-		}
-
-		// ── CentredExcerpt (position overload) — direct unit tests ──────────────
-
-		[Fact]
-		public void CentredExcerpt_Position_CentresWindowOnOffset()
-		{
-			var source = new string('L', 500) + "MARK" + new string('R', 500);
-			var centre = 500 + 2; // middle of MARK
-			var ex = ContentQuality.CentredExcerpt(source, centre, 100);
-			Assert.Contains("MARK", ex, StringComparison.Ordinal);
-			Assert.StartsWith("\u2026", ex);   // clipped left
-			Assert.EndsWith("\u2026", ex);      // clipped right
-		}
-
-		[Fact]
-		public void CentredExcerpt_Position_NoEllipsisWhenWholeSourceFits()
-		{
-			var source = "short source string";
-			var ex = ContentQuality.CentredExcerpt(source, 5, 400);
-			Assert.Equal(source, ex);           // unclipped → returned verbatim, no …
-		}
-
-		[Fact]
-		public void CentredExcerpt_Position_ClampsOutOfRangeCentre()
-		{
-			var source = new string('a', 100);
-			// Centre past the end must not throw and must still return a bounded window.
-			var ex = ContentQuality.CentredExcerpt(source, 9999, 40);
-			Assert.True(ex.Length <= 41); // 40 body + at most one leading …
-			Assert.EndsWith("a", ex);     // window sits at the tail, no trailing …
-		}
-
-		[Fact]
-		public void CentredExcerpt_Position_NewlinesReplacedWithSpaces()
-		{
-			var source = "line1\nline2\r\nline3";
-			var ex = ContentQuality.CentredExcerpt(source, 8, 400);
-			Assert.DoesNotContain('\n', ex);
-			Assert.DoesNotContain('\r', ex);
-		}
-
-				// ── CheckUnwantedPatterns ─────────────────────────────────────────────
-
-		[Fact]
-		public void CheckUnwantedPatterns_NoMatch_ReturnsEmpty()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Template", Name = "Unfilled", Patterns = ["%("], CaseSensitive = true }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns("f.html", "<p>Clean content</p>", patterns, DefaultConfig()).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_Match_ReturnsIssue()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Template", Name = "Unfilled", Patterns = ["%("], CaseSensitive = true }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns("f.html", "<p>%(unfilled_var)</p>", patterns, DefaultConfig()).ToList();
-			Assert.Single(issues);
-			Assert.Equal("UNWANTED_PATTERN", issues[0].IssueType);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_CaseInsensitive_MatchesRegardlessOfCase()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Test", Name = "Keyword", Patterns = ["todo"], CaseSensitive = false }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns("f.html", "<p>TODO: fix this</p>", patterns, DefaultConfig()).ToList();
-			Assert.Single(issues);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_CaseSensitive_NoMatchOnWrongCase()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Test", Name = "Keyword", Patterns = ["todo"], CaseSensitive = true }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns("f.html", "<p>TODO: fix this</p>", patterns, DefaultConfig()).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_MultipleOccurrences_ReportsAll()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Template", Name = "Unfilled", Patterns = ["%("], CaseSensitive = true }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns("f.html", "%(var1) and %(var2)", patterns, DefaultConfig()).ToList();
-			Assert.Equal(2, issues.Count);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_UnconfiguredGroup_Skipped()
-		{
-			// IsConfigured returns false when Patterns is empty
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Test", Name = "Empty", Patterns = [], CaseSensitive = true }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns("f.html", "anything", patterns, DefaultConfig()).ToList();
-			Assert.Empty(issues);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_OpenEnvelopeWithReferenceHits_CoalescesToOneIssue()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Security", Name = "CMS-Parameter-Leak", GroupPatterns = true,
-					CaseSensitive = true, Patterns = ["%(", ")%"], Reference = "CMS-Editor-Error" },
-				new() { Category = "Security", Name = "CMS-Editor-Error", GroupPatterns = false,
-					CaseSensitive = true, Patterns = ["produkt.", "p_name"] }
-			};
-			// Opener %( present, closer )% absent (the broken case); produkt. and p_name sit
-			// in the unbroken run after the opener → all three collapse into one finding.
-			var issues = ContentQuality.CheckUnwantedPatterns(
-				"f.html", "<x>%(produkt.278.p_name)</x>", patterns, DefaultConfig()).ToList();
-
-			var issue = Assert.Single(issues);
-			Assert.Equal("UNWANTED_PATTERN", issue.IssueType);
-			Assert.Contains("CMS-Parameter-Leak", issue.Detail);
-			Assert.Contains("missing closing ')%'", issue.Detail);
-			Assert.Contains("— patterns: %(, produkt., p_name", issue.Detail);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_OpenEnvelopeNoReferenceHitsInRange_EachFiresAlone()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Security", Name = "CMS-Parameter-Leak", GroupPatterns = true,
-					CaseSensitive = true, Patterns = ["%(", ")%"], Reference = "CMS-Editor-Error" },
-				new() { Category = "Security", Name = "CMS-Editor-Error", GroupPatterns = false,
-					CaseSensitive = true, Patterns = ["produkt.", "p_name"] }
-			};
-			// produkt. is past the whitespace bounding the open envelope's region → not folded.
-			var issues = ContentQuality.CheckUnwantedPatterns(
-				"f.html", "%(foo.bar) produkt.", patterns, DefaultConfig()).ToList();
-
-			Assert.Equal(2, issues.Count);
-			Assert.Contains(issues, x => x.Detail.Contains("— pattern: %("));
-			Assert.Contains(issues, x => x.Detail.Contains("— pattern: produkt."));
-			Assert.DoesNotContain(issues, x => x.Detail.Contains("open placeholder"));
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_EnvelopeWithoutReference_DoesNotCoalesce()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Security", Name = "CMS-Parameter-Leak", GroupPatterns = true,
-					CaseSensitive = true, Patterns = ["%(", ")%"] },   // no Reference → no coalescing
-				new() { Category = "Security", Name = "CMS-Editor-Error", GroupPatterns = false,
-					CaseSensitive = true, Patterns = ["produkt.", "p_name"] }
-			};
-			var issues = ContentQuality.CheckUnwantedPatterns(
-				"f.html", "<x>%(produkt.278.p_name)</x>", patterns, DefaultConfig()).ToList();
-
-			// Envelope fires (pattern: %() and both editor hits fire separately — three cards.
-			Assert.Equal(3, issues.Count);
-			Assert.DoesNotContain(issues, x => x.Detail.Contains("open placeholder"));
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_BalancedEnvelope_NotCoalesced()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Security", Name = "CMS-Parameter-Leak", GroupPatterns = true,
-					CaseSensitive = true, Patterns = ["%(", ")%"], Reference = "CMS-Editor-Error" },
-				new() { Category = "Security", Name = "CMS-Editor-Error", GroupPatterns = false,
-					CaseSensitive = true, Patterns = ["produkt.", "p_name"] }
-			};
-			// Both delimiters present → balanced, not the broken case → no coalescing.
-			var issues = ContentQuality.CheckUnwantedPatterns(
-				"f.html", "<x>%(produkt.278.p_name)%</x>", patterns, DefaultConfig()).ToList();
-
-			Assert.DoesNotContain(issues, x => x.Detail.Contains("open placeholder"));
-			Assert.Contains(issues, x => x.Detail.Contains("— patterns: %(, )%"));
-			Assert.Equal(3, issues.Count);
-		}
-
-		[Fact]
-		public void CheckUnwantedPatterns_RegionStopsAtMarkupBoundary()
-		{
-			var patterns = new List<ContentUnwantedPattern>
-			{
-				new() { Category = "Security", Name = "CMS-Parameter-Leak", GroupPatterns = true,
-					CaseSensitive = true, Patterns = ["%(", ")%"], Reference = "Inner" },
-				new() { Category = "Security", Name = "Inner", GroupPatterns = false,
-					CaseSensitive = true, Patterns = ["institut.", "name"] }
-			};
-			// The 'name' inside the placeholder folds; the 'name' after </p> is past the '<'
-			// boundary and must NOT be folded — it surfaces on its own.
-			var issues = ContentQuality.CheckUnwantedPatterns(
-				"f.html", "%(institut.name)</p>name", patterns, DefaultConfig()).ToList();
-
-			Assert.Contains(issues, x => x.Detail.Contains("open placeholder")
-				&& x.Detail.Contains("institut."));
-			Assert.Contains(issues, x => x.Detail == "Security: Inner — pattern: name");
-		}
-
-		[Fact]
-		public void ExtractHighlightPatterns_MergedEnvelopeDetail_ReturnsAllPatterns()
-		{
-			// The merged Detail must round-trip through the highlighter so every folded
-			// pattern is marked on the card and in the ticket.
-			var word = "UNWANTED_PATTERN:Security: CMS-Parameter-Leak — open placeholder, " +
-				"missing closing ')%' — patterns: %(, produkt., p_name";
-			var result = ContentQualityTriage.ExtractHighlightPatterns(word);
-			Assert.Equal(new[] { "%(", "produkt.", "p_name" }, result);
 		}
 
 		// ── WriteTranslationIssues end-to-end (fileset #286) ──────────────────
@@ -1304,7 +668,7 @@ namespace Crawler.Tests
 			// A bare orphan closer (space before) flags QUOTE_WRONG_OPEN; the located
 			// position must be that U+2019 so triage can mark exactly it.
 			var text  = "Hello \u2019 world";
-			var flags = ContentQuality.LocateQuoteFlags(text, DefaultConfig(), "en");
+			var flags = Quotes.LocateFlags(text, DefaultConfig(), "en");
 			Assert.Contains(flags, f => f.Type == "QUOTE_WRONG_OPEN" && text[f.Pos] == '\u2019');
 		}
 
@@ -1313,7 +677,7 @@ namespace Crawler.Tests
 		{
 			// Cleanly paired single quotes — no pairing flag, hence no located trigger.
 			var text  = "\u2018a good time\u2019";
-			var flags = ContentQuality.LocateQuoteFlags(text, DefaultConfig(), "en");
+			var flags = Quotes.LocateFlags(text, DefaultConfig(), "en");
 			Assert.DoesNotContain(flags, f => f.Type == "QUOTE_WRONG_OPEN");
 		}
 
@@ -1323,7 +687,7 @@ namespace Crawler.Tests
 			// German-double opener „ then English-double opener “ — the “ is the
 			// divergent double-system opener that makes the block "mix systems".
 			var text = "\u201EHallo\u201C und \u201Chi\u201D";
-			var pos  = ContentQuality.LocateSystemMixMismatch(text);
+			var pos  = Quotes.LocateSystemMixMismatch(text);
 			Assert.True(pos >= 0);
 			Assert.Equal('\u201C', text[pos]);
 		}
@@ -1333,7 +697,7 @@ namespace Crawler.Tests
 		{
 			// Only one double system present (plus singles, which are excluded) → no mix.
 			var text = "\u201Cone\u201D and \u2018two\u2019";
-			Assert.Equal(-1, ContentQuality.LocateSystemMixMismatch(text));
+			Assert.Equal(-1, Quotes.LocateSystemMixMismatch(text));
 		}
 
 		[Fact]
@@ -1347,7 +711,7 @@ namespace Crawler.Tests
 			var text       = "\u201EX\u201C dann \u201CY";
 			var firstU201C = text.IndexOf('\u201C');                 // German closer of „X“
 			var strayU201C = text.IndexOf('\u201C', firstU201C + 1); // stray English opener
-			var pos        = ContentQuality.LocateSystemMixMismatch(text);
+			var pos        = Quotes.LocateSystemMixMismatch(text);
 			Assert.Equal(strayU201C, pos);
 			Assert.NotEqual(firstU201C, pos);
 		}
@@ -1375,7 +739,7 @@ namespace Crawler.Tests
 		[InlineData("for advertising campaigns\u2019 success")]
 		public void CheckQuotePairing_EnglishWordFinalSPossessive_NotFlagged(string text)
 		{
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, ConfigWithWordFinalSPossessive(true), "en").ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 		}
@@ -1386,7 +750,7 @@ namespace Crawler.Tests
 			// With the flag off, the orphan U+2019 after 's' is the original false
 			// positive — proving the rule, not some other change, suppresses it.
 			var text   = "for advertising campaigns\u2019 success";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, ConfigWithWordFinalSPossessive(false), "en").ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 		}
@@ -1398,7 +762,7 @@ namespace Crawler.Tests
 			// rule fires only for orphans, so the opener-present case is untouched
 			// (no QUOTE_UNMATCHED manufactured, no QUOTE_WRONG_OPEN).
 			var text   = "He said \u2018genius\u2019 today";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, ConfigWithWordFinalSPossessive(true), "en").ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_UNMATCHED");
@@ -1410,7 +774,7 @@ namespace Crawler.Tests
 			// The de profile does not enable the rule (default false) → an orphan
 			// s' still flags. Suppression is opt-in per profile, not automatic.
 			var text   = "Das ist Klaus\u2019 Auto";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, DefaultConfig(), "de").ToList();
 			Assert.Contains(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 		}
@@ -1420,18 +784,14 @@ namespace Crawler.Tests
 		// branches the coverage run showed unexercised.
 
 		[Fact]
-		public void CheckQuotePairing_Verification_SharedGlyphPairInBlock_OrphanStillFlagged()
+		public void CheckQuotePairing_CleanGermanPairBesideOrphan_OnlyOrphanFlagged()
 		{
-			// Coverage for ProximityPair's shared-character branch (U+201C acting as
-			// the German closer of „…", the both-opener-and-closer glyph). It was
-			// unexercised because every verification test used single quotes. Here a
-			// clean „…" pair sits alongside a genuine orphan U+2019, so verification
-			// runs and ProximityPair pairs the „…" via its context-wins path. That
-			// pairing agrees with the cheap pass, so it adds no downgrade — the
-			// assertion guards that the unrelated orphan stays a real finding.
+			// A clean „…" pair (U+201C as the German closer, the both-opener-and-
+			// closer glyph, resolved by the context-wins rule) sits beside a
+			// genuine orphan U+2019 with spaces on both sides. The pair produces
+			// no finding; the unrelated orphan stays a real QUOTE_WRONG_OPEN.
 			var text   = "\u201EHallo\u201C und \u2019 Ende";
-			var issues = ContentQuality.CheckQuotePairing(
-				"f.html", text, DefaultConfigWithVerification(), "de").ToList();
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "de").ToList();
 			Assert.Single(issues);
 			Assert.Equal("QUOTE_WRONG_OPEN", issues[0].IssueType);
 		}
@@ -1444,7 +804,7 @@ namespace Crawler.Tests
 			// LocateQuoteFlags returns BOTH a QUOTE_SYSTEM_MIX position (the #467
 			// branch the coverage run showed unexercised) and the pairing flag.
 			var text  = "\u201EX\u201C \u201CY";
-			var flags = ContentQuality.LocateQuoteFlags(text, DefaultConfig(), "de");
+			var flags = Quotes.LocateFlags(text, DefaultConfig(), "de");
 			Assert.Contains(flags, f => f.Type == "QUOTE_SYSTEM_MIX");
 			Assert.Contains(flags, f => f.Type == "QUOTE_UNMATCHED");
 		}
@@ -1452,13 +812,13 @@ namespace Crawler.Tests
 		[Fact]
 		public void LocateQuoteFlags_EmptyText_ReturnsEmpty()
 		{
-			Assert.Empty(ContentQuality.LocateQuoteFlags(string.Empty, DefaultConfig(), "en"));
+			Assert.Empty(Quotes.LocateFlags(string.Empty, DefaultConfig(), "en"));
 		}
 
 		[Fact]
 		public void LocateSystemMixMismatch_EmptyText_ReturnsMinusOne()
 		{
-			Assert.Equal(-1, ContentQuality.LocateSystemMixMismatch(string.Empty));
+			Assert.Equal(-1, Quotes.LocateSystemMixMismatch(string.Empty));
 		}
 
 		[Fact]
@@ -1471,7 +831,7 @@ namespace Crawler.Tests
 			// pairs without a flag.
 			var cfg = DefaultConfig();
 			cfg.ContentQualityApostropheElisions = new Dictionary<string, ApostropheElisionProfile>();
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", "\u2018a good time\u2019", cfg, "en").ToList();
 			Assert.Empty(issues);
 		}
@@ -1486,7 +846,7 @@ namespace Crawler.Tests
 			// (the flag-off test above proves the matcher would otherwise flag it).
 			// Changing this must be a conscious decision — hence this guard.
 			var text   = "the chapter Genetics\u2019 was removed";
-			var issues = ContentQuality.CheckQuotePairing(
+			var issues = Quotes.CheckPairing(
 				"f.html", text, ConfigWithWordFinalSPossessive(true), "en").ToList();
 			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_WRONG_OPEN");
 		}
@@ -1499,19 +859,21 @@ namespace Crawler.Tests
 			// U+201C never closes U+201C, so each is pushed as an English-double
 			// opener and both end unmatched.
 			var text   = "Land \u201CCountry\u201C (Feldname)";
-			var issues = ContentQuality.CheckQuotePairing("f.html", text, DefaultConfig(), "de").ToList();
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "de").ToList();
 			Assert.Equal(2, issues.Count(i => i.IssueType == "QUOTE_UNMATCHED"));
 		}
 
 		[Fact]
-		public void CheckQuotePairing_GermanOpenerStraightQuoteCloser_ReportsUnmatched()
+		public void CheckQuotePairing_GermanOpenerStraightQuoteCloser_ReportsMixedKind()
 		{
-			// Live defect (mobiles-bezahlen, glossar, betrugsversuche): German „
-			// opener with a STRAIGHT ASCII quote (U+0022) as the visual closer.
-			// U+0022 is not a typographic closer in any system, so „ is unmatched.
+			// Live defect (mobiles-bezahlen, glossar, betrugsversuche): German „ opener
+			// closed by a STRAIGHT ASCII quote (U+0022). D053: opening typographic then
+			// closing straight is a KIND mismatch — QUOTE_MIXED_KIND (previously
+			// misreported as "unclosed opener", because U+0022 was invisible to the walk).
 			var text   = "die App \u201EMobiles Bezahlen\u0022 noch nicht";
-			var issues = ContentQuality.CheckQuotePairing("f.html", text, DefaultConfig(), "de").ToList();
-			Assert.Contains(issues, i => i.IssueType == "QUOTE_UNMATCHED" && i.Detail.Contains("German-double"));
+			var issues = Quotes.CheckPairing("f.html", text, DefaultConfig(), "de").ToList();
+			Assert.Contains(issues, i => i.IssueType == "QUOTE_MIXED_KIND" && i.Detail.Contains("German-double"));
+			Assert.DoesNotContain(issues, i => i.IssueType == "QUOTE_UNMATCHED");
 		}
 
 		// ── CheckWordCollisions ───────────────────────────────────────────────
@@ -1522,7 +884,7 @@ namespace Crawler.Tests
 			// Confirmed live shape: editor abuses <span class="h2"> as a heading,
 			// bare text follows with no space → "Basismodul" + "Inhalte" merge.
 			var doc = Doc("<p><span class=\"h2\">Basismodul</span>Inhalte des Moduls</p>");
-			var issues = ContentQuality.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
+			var issues = DefectWordCollisions.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 			Assert.Equal("WORD_COLLISION", issues[0].IssueType);
 			// Context is the raw html around the seam (for code-with-highlight rendering).
@@ -1535,7 +897,7 @@ namespace Crawler.Tests
 		{
 			// Leading-seam direction: bare text abuts the inline element.
 			var doc = Doc("<p>inhalte<span class=\"h2\">Basismodul</span></p>");
-			var issues = ContentQuality.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
+			var issues = DefectWordCollisions.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
 			Assert.Single(issues);
 			Assert.Equal("WORD_COLLISION", issues[0].IssueType);
 			Assert.Contains("inhalte<span", issues[0].Context);
@@ -1548,8 +910,28 @@ namespace Crawler.Tests
 			// Legitimate inline emphasis splitting one word: <b>bezah</b>len →
 			// "bezahlen". lowercase→lowercase seam must NOT be flagged.
 			var doc = Doc("<p><b>bezah</b>len Sie hier</p>");
-			var issues = ContentQuality.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
+			var issues = DefectWordCollisions.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
+		}
+
+		[Fact]
+		public void CheckWordCollisions_Detail_CarriesSourceRankPrefix()
+		{
+			// D047: each finding's Detail is prefixed with a "[N]" document-order
+			// rank (the inline node's position) so BuildGroups can recover page
+			// order; the log otherwise freezes findings in ConcurrentBag/LIFO
+			// order. The single span here is the first inline node, so rank 0.
+			var trailing = DefectWordCollisions.CheckWordCollisions(
+				"f.html", Doc("<p><span class=\"h2\">Basismodul</span>Inhalte des Moduls</p>"),
+				DefaultConfig()).ToList();
+			Assert.Single(trailing);
+			Assert.StartsWith("[0] Inline <span> abuts bare text", trailing[0].Detail);
+
+			var leading = DefectWordCollisions.CheckWordCollisions(
+				"f.html", Doc("<p>inhalte<span class=\"h2\">Basismodul</span></p>"),
+				DefaultConfig()).ToList();
+			Assert.Single(leading);
+			Assert.StartsWith("[0] Bare text abuts inline <span>", leading[0].Detail);
 		}
 
 		[Fact]
@@ -1558,7 +940,7 @@ namespace Crawler.Tests
 			// A separating space (or the Version-1 <br> shape that leaves a trailing
 			// space inside the span) breaks the seam — no collision.
 			var doc = Doc("<p><span class=\"h2\">Basismodul </span>Inhalte</p>");
-			var issues = ContentQuality.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
+			var issues = DefectWordCollisions.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 
@@ -1566,7 +948,7 @@ namespace Crawler.Tests
 		public void CheckWordCollisions_NextSiblingStartsWithSpace_DoesNotFire()
 		{
 			var doc = Doc("<p><span class=\"h2\">Basismodul</span> Inhalte</p>");
-			var issues = ContentQuality.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
+			var issues = DefectWordCollisions.CheckWordCollisions("f.html", doc, DefaultConfig()).ToList();
 			Assert.Empty(issues);
 		}
 	}

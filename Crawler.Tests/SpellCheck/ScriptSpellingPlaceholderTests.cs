@@ -117,5 +117,44 @@ namespace Crawler.Tests.SpellCheck
 			Assert.True(ScriptSpellingTickets.IsLatinFiller("consectetuer"));
 			Assert.False(ScriptSpellingTickets.IsLatinFiller("Maximalendite"));
 		}
+
+		[Fact]
+		public void LocateFillerRun_SpansFirstToLastFiller_OverInterspersedNonFiller()
+		{
+			var (start, length) = ScriptSpellingTickets.LocateFillerRun(LoremExcerpt);
+
+			Assert.True(start >= 0);
+			var hit = LoremExcerpt.Substring(start, length);
+
+			// Run starts at the first filler ("Lorem") and ends at the last ("penatibus"); the leading
+			// prose ("Beratung: ") and the trailing "." are outside it.
+			Assert.Equal("Beratung: ", LoremExcerpt[..start]);
+			Assert.StartsWith("Lorem", hit);
+			Assert.EndsWith("penatibus", hit);
+			Assert.Equal(".", LoremExcerpt[(start + length)..]);
+
+			// One contiguous span: short ambiguous Latin excluded from the filler set ("sit", "Cum") sits
+			// INSIDE the run, not breaking it.
+			Assert.Contains("sit", hit);
+			Assert.Contains("Cum", hit);
+		}
+
+		[Fact]
+		public void LocateFillerRun_SingleFillerToken_IsItsOwnSpan()
+		{
+			var (start, length) = ScriptSpellingTickets.LocateFillerRun("x consectetuer y");
+			Assert.Equal("consectetuer", "x consectetuer y".Substring(start, length));
+		}
+
+		[Theory]
+		[InlineData("nur deutscher Fließtext ohne Füllwörter")]
+		[InlineData("")]
+		[InlineData(null)]
+		public void LocateFillerRun_NoFiller_ReturnsNone(string? excerpt)
+		{
+			var (start, length) = ScriptSpellingTickets.LocateFillerRun(excerpt);
+			Assert.Equal(-1, start);
+			Assert.Equal(0, length);
+		}
 	}
 }

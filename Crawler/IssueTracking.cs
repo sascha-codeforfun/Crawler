@@ -1,4 +1,6 @@
 using System.Text;
+using Crawler.Urls;
+using Crawler.Security;
 
 namespace Crawler
 {
@@ -109,7 +111,7 @@ namespace Crawler
 		/// <summary>
 		/// Loads IssueTracking.log. Returns empty list if file does not exist.
 		/// Skips the header line and blank lines. Also drops any record whose Url is
-		/// the unresolved-lookup sentinel "error" (see UrlCache.LookUpUrl), since it
+		/// the unresolved-lookup sentinel "error" (see Cache.UrlFor), since it
 		/// can't be tied to a real page.
 		/// </summary>
 		public static List<IssueRecord> Load(string filePath)
@@ -395,30 +397,32 @@ namespace Crawler
 		// ── Parsers ───────────────────────────────────────────────────────────
 
 		/// <summary>
-		/// Parses 07-404-sources.log.
-		/// Format per line: {404Url}|{sourcePageUrl}
-		/// Pipe delimiter — RFC 3986 defines '|' as not valid in URLs.
-		/// Url = 404Url, SourceLabel = sourcePageUrl.
+		/// Parses the 07-404-sources dual-locale CSV pair (the _semicolon.csv is the
+		/// canonical machine-read side; quote-aware via ParseCsvLine).
+		/// Columns: 404Url, SourceUrl (header row skipped).
+		/// Url = 404Url, SourceLabel = SourceUrl.
 		/// </summary>
-		public static List<IssueRecord> PromoteFrom404(string logPath)
+		public static List<IssueRecord> PromoteFrom404(string csvBasePath)
 		{
-			if (!File.Exists(logPath))
+			var semicolonPath = csvBasePath + IssueLogWriter.CsvSemicolonSuffix;
+			if (!File.Exists(semicolonPath))
 			{
 				return [];
 			}
 
-			return File.ReadAllLines(logPath, Encoding.UTF8)
+			return File.ReadAllLines(semicolonPath, Encoding.UTF8)
 				.Where(l => l.Length > 0)
-				.Select(line =>
+				.Select(l => IssueLogWriter.ParseCsvLine(l, ';'))
+				.Where(p => p.Length > 0
+					&& !string.Equals(p[0], "404Url", StringComparison.OrdinalIgnoreCase)) // header row
+				.Select(p =>
 				{
-					var idx = line.IndexOf('|');
-					var url = idx >= 0 ? line[..idx].Trim() : line.Trim();
-					var source = idx >= 0 ? line[(idx + 1)..].Trim() : string.Empty;
+					string F(int i) => i < p.Length ? p[i].Trim() : string.Empty;
 					return new IssueRecord
 					{
 						Type = "404",
-						Url = url,
-						SourceLabel = source,
+						Url = F(0),
+						SourceLabel = F(1),
 					};
 				})
 				.Where(r => !string.IsNullOrEmpty(r.Url))
@@ -427,31 +431,37 @@ namespace Crawler
 		}
 
 		/// <summary>
-		/// Parses 09-self-link-analysis.log.
-		/// Format: File|FileUrl|LinkFound|ContextSnippet (header line skipped)
+		/// Parses the 09-self-link-analysis dual-locale CSV pair (the _semicolon.csv
+		/// is the canonical machine-read side; quote-aware via ParseCsvLine).
+		/// Columns: File, FileUrl, LinkFound, ContextSnippet (header row skipped).
 		/// Url = FileUrl, Excerpt = ContextSnippet.
 		/// Every row is an issue — a page linking to itself.
 		/// </summary>
-		public static List<IssueRecord> PromoteFromSelfLink(string logPath)
+		public static List<IssueRecord> PromoteFromSelfLink(string csvBasePath)
 		{
-			if (!File.Exists(logPath))
+			var semicolonPath = csvBasePath + IssueLogWriter.CsvSemicolonSuffix;
+			if (!File.Exists(semicolonPath))
 			{
 				return [];
 			}
 
-			return File.ReadAllLines(logPath, Encoding.UTF8)
-				.Where(l => l.Length > 0
-					&& !l.StartsWith("File|", StringComparison.OrdinalIgnoreCase))
-				.Select(line =>
+			return File.ReadAllLines(semicolonPath, Encoding.UTF8)
+				.Where(l => l.Length > 0)
+				.Select(l => IssueLogWriter.ParseCsvLine(l, ';'))
+				.Where(p => p.Length > 0
+					&& !string.Equals(p[0], "File", StringComparison.OrdinalIgnoreCase)) // header row
+				.Select(p =>
 				{
-					var p = line.Split('|');
 					string F(int i) => i < p.Length ? p[i].Trim() : string.Empty;
 					var filename = F(0);
 					return new IssueRecord
 					{
 						Type = "SELFLINK",
 						Url = F(1),
-						Excerpt = F(3),
+						// F(3) ContextSnippet is the one read-back content field that can
+						// carry a write-side formula-injection neutralizer; strip it so the
+						// excerpt round-trips to its original text (see CsvInjectionGuard).
+						Excerpt = CsvInjectionGuard.Denormalize(F(3)),
 						CrawlSource = CrawlIndex.LookUpSourceForFile(filename),
 					};
 				})
@@ -512,7 +522,7 @@ namespace Crawler
 		/// <summary>
 		/// Parses 10-content-quality-issues.log.
 		/// Format: Filename|IssueType|Detail|Context (header line skipped)
-		/// Type = QUALITY, Url resolved from filename via UrlCache,
+		/// Type = QUALITY, Url resolved from filename via Cache,
 		/// Word = IssueType (LIGATURE, QUOTE_UNMATCHED etc.), Excerpt = Context.
 		///
 		/// [KEEP] Reader-side defence: lines whose F(0) doesn't look like a
@@ -605,7 +615,7 @@ namespace Crawler
 		}
 
 		/// <summary>
-		/// Parses 08-seo-data.log and promotes pages that are indexable (no noindex
+		/// Parses 08-seo-data.csv and promotes pages that are indexable (no noindex
 		/// robots directive) but were only reachable via the CMS list pass (source = "list"),
 		/// meaning they have no inbound links from crawled pages.
 		/// Type = SEO, Word = "robots:index+source:list", Comment = "IndexableButNotCrawlable".
@@ -635,16 +645,19 @@ namespace Crawler
 				{
 					continue;
 				}
-				// Skip header
-				if (line.StartsWith("url@@@", StringComparison.OrdinalIgnoreCase))
+				// Skip the column header, and defensively a legacy "sep=;" directive
+				// (08-seo-data.csv files written before D085 carried one; the writer no
+				// longer emits it because it breaks Excel's BOM-based UTF-8 detection).
+				if (line.StartsWith("sep=", StringComparison.OrdinalIgnoreCase)
+					|| line.StartsWith("url;", StringComparison.OrdinalIgnoreCase))
 				{
 					continue;
 				}
 
-				var parts = line.Split("@@@");
+				var parts = IssueLogWriter.ParseCsvLine(line, ';');
 				string F(int i) => i < parts.Length ? parts[i].Trim() : string.Empty;
 
-				// Column indices (08-seo-data.log):
+				// Column indices (08-seo-data.csv):
 				// url=0 robots=1 title=2 titleLen=3 desc=4 descLen=5 keywords=6 source=7 h1Count=8
 				var url = F(0);
 				var robots = F(1).ToLowerInvariant();
@@ -922,7 +935,7 @@ namespace Crawler
 						continue;
 					}
 
-					var spellFilename = UrlCache.GetFilenameForUrl(pageUrl);
+					var spellFilename = Cache.FilenameFor(pageUrl);
 					issues.Add(new IssueRecord
 					{
 						Type = "SPELLING",

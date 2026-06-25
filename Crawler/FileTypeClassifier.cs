@@ -12,6 +12,12 @@ namespace Crawler
 	/// </summary>
 	public static class FileTypeClassifier
 	{
+		// NOTE (provisional home): UnverifiedExtension is a download/settle lifecycle
+		// constant parked here — FileTypeClassifier resolves it — until the root-file
+		// cleanup gives the download/settle constants a permanent home. Revisit then.
+		/// <summary>The provisional extension a download is saved under before settle.</summary>
+		public const string UnverifiedExtension = ".unverified";
+
 		/// <summary>
 		/// True when an HTTP response's media type indicates HTML content that
 		/// should be parsed for link extraction. Anchor hrefs frequently point
@@ -97,7 +103,7 @@ namespace Crawler
 		/// <summary>
 		/// The outcome of classifying one downloaded file during settle.
 		/// <see cref="TreatAsHtml"/> drives the final extension (HTML → the configured
-		/// page extension; otherwise the file keeps <see cref="Tools.UnverifiedExtension"/>).
+		/// page extension; otherwise the file keeps <see cref="UnverifiedExtension"/>).
 		/// <see cref="IsMismatch"/> is true when the three signals disagreed and the
 		/// case warrants a log #23 row.
 		/// </summary>

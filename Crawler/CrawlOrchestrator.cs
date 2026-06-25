@@ -1,4 +1,10 @@
 using System.Text;
+using Crawler.Downloader;
+using Crawler.Snapshots;
+using Crawler.Logging;
+using Crawler.Urls;
+using Crawler.Html;
+using Crawler.Security;
 
 namespace Crawler
 {
@@ -99,6 +105,9 @@ namespace Crawler
 
 			await Step_PerformPostCrawlPass(ctx, config);
 
+			// All download phases done — present any out-of-root refusals in one block.
+			Crawl.WriteContainmentRefusalSummary();
+
 			return new CrawlOrchestratorResult();
 		}
 
@@ -128,7 +137,7 @@ namespace Crawler
 			var mostRecent = Directory
 				.EnumerateDirectories(sessionParentDirectory)
 				.Select(d => new DirectoryInfo(d))
-				.Where(d => Tools.IsTimestampFolderName(d.Name))
+				.Where(d => SnapshotFolder.Matches(d.Name))
 				.OrderByDescending(d => d.CreationTimeUtc)
 				.FirstOrDefault();
 
@@ -298,7 +307,8 @@ namespace Crawler
 			FileIo.ClearLogs(
 				ctx.RedirectAnalysisPath,
 				ctx.ErrorLogPath,
-				ctx.ErrorSourcesLogPath,
+				ctx.ErrorSourcesCsvBasePath + IssueLogWriter.CsvSemicolonSuffix,
+				ctx.ErrorSourcesCsvBasePath + IssueLogWriter.CsvCommaSuffix,
 				ctx.SeoDataPath);
 
 			// Spell-check outputs — cleared so previous results don't bleed into new run.
@@ -308,7 +318,8 @@ namespace Crawler
 				ctx.SpellLocatedLogPath,
 				ctx.WordTicketsDiagnosticLogPath,
 				ctx.SpellSuppressionSuggestionsLogPath,
-				ctx.SelfLinkAnalysisPath,
+				ctx.SelfLinkAnalysisCsvBasePath + IssueLogWriter.CsvSemicolonSuffix,
+				ctx.SelfLinkAnalysisCsvBasePath + IssueLogWriter.CsvCommaSuffix,
 				ctx.UserDictionaryOrphanWordsFilePath);
 
 			// Content comparison — only present when CmsContentList is configured.
@@ -375,6 +386,20 @@ namespace Crawler
 			CancellationTokenSource? progressCts = CrawlerContext.Silent
 				? null : StartCrawlProgressDisplay(ctx.FileDownloadDirectory);
 
+			// [KEEP] Security boundary — build the host allowlist once and hand it to
+			// the crawler. Each declared host is admitted exactly (no sibling
+			// subdomains, no parent apex, no suffix look-alikes). Malformed
+			// UrlSubdomainsAllowed entries are dropped and logged loudly.
+			var crawlPolicy = CrawlPolicy.FromConfig(config.Url, config.UrlSubdomainsAllowed);
+			foreach (var ignored in crawlPolicy.IgnoredEntries)
+			{
+				Logger.LogError(
+					$"UrlSubdomainsAllowed: ignoring malformed entry '{ignored}' — each entry must be a " +
+					"full base URL (scheme + host), e.g. \"https://help.example.com\".");
+			}
+			Crawl.SetCrawlPolicy(crawlPolicy);
+			CrawlAsset.SetCrawlPolicy(crawlPolicy);
+
 			await Crawl.DownloadWebsiteAsync(
 				url,
 				ctx.SaveDirectory,
@@ -397,7 +422,7 @@ namespace Crawler
 					.Any(l => l.Contains("saved", StringComparison.OrdinalIgnoreCase));
 			if (hasSavedEntries)
 			{
-				Tools.Log(url, "completed", "info", ctx.CrawlerRawLogPath);
+				CrawlLogWriter.Write(url, "completed", "info", ctx.CrawlerRawLogPath);
 			}
 			else
 			{
@@ -509,7 +534,7 @@ namespace Crawler
 				var finalName = fileName;
 				bool alreadySettled = alreadySettledUrls.Contains(url);
 				if (!alreadySettled
-					&& fileName.EndsWith(Tools.UnverifiedExtension, StringComparison.OrdinalIgnoreCase)
+					&& fileName.EndsWith(FileTypeClassifier.UnverifiedExtension, StringComparison.OrdinalIgnoreCase)
 					&& File.Exists(downloadPath))
 				{
 					// One head read serves both sniffs: HTML scans the whole
@@ -739,7 +764,7 @@ namespace Crawler
 		/// <summary>
 		/// True when the raw crawl log (00) ends with a "completed" marker — i.e. the
 		/// crawl finished normally. Mirrors the last-non-empty-line check used by
-		/// <see cref="Tools.AnalysePreviousCrawl"/> so "completed" means the same thing
+		/// <see cref="CrawlLog.Analyse"/> so "completed" means the same thing
 		/// here as in the snapshot-integrity check.
 		/// </summary>
 		private static bool RawCrawlIsComplete(string rawLogPath)
@@ -813,7 +838,7 @@ namespace Crawler
 			return ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
 		}
 
-		/// <summary>Reads the first <see cref="Tools.HtmlSniffByteCount"/> bytes of a
+		/// <summary>Reads the first <see cref="MarkupFile.SniffByteCount"/> bytes of a
 		/// file once, for the settle-phase sniffs. The HTML sniff scans the whole
 		/// window; the PDF sniff reads only the leading magic from the front of the
 		/// same buffer. Returns an empty array on any read error — both
@@ -824,7 +849,7 @@ namespace Crawler
 			try
 			{
 				using var fs = File.OpenRead(path);
-				var buffer = new byte[Tools.HtmlSniffByteCount];
+				var buffer = new byte[MarkupFile.SniffByteCount];
 				int read = fs.Read(buffer, 0, buffer.Length);
 				if (read < buffer.Length)
 				{
@@ -882,7 +907,7 @@ namespace Crawler
 			}
 
 			var unverified = Directory
-				.GetFiles(ctx.FileDownloadDirectory, "*" + Tools.UnverifiedExtension,
+				.GetFiles(ctx.FileDownloadDirectory, "*" + FileTypeClassifier.UnverifiedExtension,
 					SearchOption.TopDirectoryOnly)
 				.OrderBy(f => f, StringComparer.Ordinal)
 				.ToList();
@@ -892,7 +917,7 @@ namespace Crawler
 			}
 
 			// URL lookup for .unverified files must come from 01 directly — the
-			// UrlCache (02-derived) excludes them by design.
+			// Cache (02-derived) excludes them by design.
 			var urlByFile = LoadUnverifiedUrlMap(ctx.CrawlerLogPath);
 
 			var promote = new List<(string Path, string FinalName, string Url, string Ext)>();
@@ -1044,7 +1069,7 @@ namespace Crawler
 		}
 
 		// Reads filename → URL from 01 for ".unverified" rows only. 01 keeps these
-		// rows (they count for 404 detection); the 02-derived UrlCache drops them.
+		// rows (they count for 404 detection); the 02-derived Cache drops them.
 		private static Dictionary<string, string> LoadUnverifiedUrlMap(string crawlerLogPath)
 		{
 			var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1069,7 +1094,7 @@ namespace Crawler
 					}
 
 					var fileName = parts[3];
-					if (!fileName.EndsWith(Tools.UnverifiedExtension, StringComparison.OrdinalIgnoreCase))
+					if (!fileName.EndsWith(FileTypeClassifier.UnverifiedExtension, StringComparison.OrdinalIgnoreCase))
 					{
 						continue;
 					}
@@ -1321,7 +1346,7 @@ namespace Crawler
 				// [KEEP] Security boundary — post-crawl list paths are validated against
 				// the primary domain before downloading. Subdomains are not expected here
 				// since log 05 is derived from the CMS CSV which is www-domain only.
-				.Where(u => Tools.IsValidLink(u, config.Url, config.DownloadExclusions))
+				.Where(u => Validity.IsInDownloadScope(u, new Uri(config.Url).GetLeftPart(UriPartial.Authority), config.DownloadExclusions))
 				.ToList();
 
 			if (listPaths.Count == 0)
@@ -1356,7 +1381,7 @@ namespace Crawler
 
 			// Write second completed marker so crawl integrity check passes.
 			// Written to the RAW log (00); settle projects it into 01 below.
-			Tools.Log(config.Url, "completed", "post-crawl-pass", ctx.CrawlerRawLogPath);
+			CrawlLogWriter.Write(config.Url, "completed", "post-crawl-pass", ctx.CrawlerRawLogPath);
 			Logger.LogInfo("Post-crawl pass complete.");
 
 			// Settle the newly-downloaded list pages and regenerate 01 from the
@@ -1365,7 +1390,7 @@ namespace Crawler
 
 			// [KEEP] Second CreateLookupFile pass — only runs when PostCrawlPass is
 			// true and list pages were actually downloaded. Rebuilds the index to include
-			// "list" entries so UrlCache and all downstream analysis see the full page set.
+			// "list" entries so Cache and all downstream analysis see the full page set.
 			Logger.LogInfo("Rebuilding lookup file (second pass — includes post-crawl list entries)...");
 			CrawlIndex.CreateLookupFile(ctx.CrawlerLogPath, ctx.CrawlerLogIndexPath, config.ResolvedDegreeOfParallelism);
 			Logger.LogInfo("Lookup file rebuilt.");
@@ -1423,7 +1448,7 @@ namespace Crawler
 		/// Verifies every downloaded HTML file has a corresponding entry in
 		/// 02-crawler-index.log. Orphan files are renamed to .ext.bak for safe
 		/// recovery in interactive mode; silent mode logs and skips.
-		/// Pure detection lives in Tools.DetectOrphans; the interactive prompt
+		/// Pure detection lives in OrphanFiles.Detect; the interactive prompt
 		/// loop lives in InteractiveTriage.ResolveOrphans.
 		/// </summary>
 		private static void CrawlerIndexIntegrityCheck(
@@ -1432,7 +1457,7 @@ namespace Crawler
 			string filePattern,
 			bool silent)
 		{
-			var orphans = Tools.DetectOrphans(downloadDirectory, indexPath, filePattern);
+			var orphans = OrphanFiles.Detect(downloadDirectory, indexPath, filePattern);
 
 			if (orphans.Count == 0)
 			{
