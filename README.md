@@ -26,10 +26,16 @@ checkers don't:
 - **Inline JavaScript string literals** — the user-visible strings embedded in a
   page's own `<script>` blocks, which ordinary spell-checkers never see.
 - **String literals inside `.js` files** — the same, for external scripts.
+- **Per-element language** — each run of text is checked against the language
+  declared closest to it (its nearest `lang` attribute, with the page language as the
+  floor), so a foreign-language island inside an otherwise-English page is checked
+  against the right dictionary instead of drowning in false positives — at virtually
+  no added cost.
 
 Dictionaries are Hunspell `.dic`/`.aff` files. They are **operator-supplied** (none
 ship with the app); on a fresh install the app points you at where to put them and
-how to wire them up.
+how to wire them up. An optional **foreign-words list** lets you allow researched,
+comment-justified words from any script without loosening your main dictionaries.
 
 ### Content quality — the other stronghold
 
@@ -42,8 +48,22 @@ surrounding context. What it looks for:
   quote system. A lower-confidence "ambiguous" tier is flagged separately for review.
 - **Ligature characters** found in visible text.
 - **Invisible characters** — control, bidirectional, zero-width characters and stray
-  byte-order marks, detected across the whole page (with `<title>` and `<meta>`
-  called out specifically).
+  byte-order marks, detected across the whole page (with `<title>`, `<meta>` and
+  editor-authored body text each called out specifically).
+- **Mixed alphabets (homoglyphs)** — a single word built from more than one script,
+  where look-alike letters stand in for each other — e.g. a Latin `A` where the
+  Cyrillic `А` was meant. Same glyph, different character, so it silently matches no
+  dictionary; reported with the impostor character pinpointed.
+- **Confusable punctuation in code** — a non-ASCII look-alike of an ASCII syntax
+  character wedged between letters (e.g. a stray full-width or prolonged-sound mark
+  inside what should read `padding-top`), reported with the plain-ASCII form it
+  should have been.
+- **Decomposed & mixed-normalization text** — visible text stored in decomposed
+  Unicode form (a base letter plus a separate combining mark) where the composed form
+  was meant: visually identical, but byte-fragile for site search, assistive
+  technology, AI and anything else that compares without normalizing. Flags both
+  fully decomposed text and pages that carry the same word in two different
+  encodings. Scripts whose marks have no composed form (e.g. Arabic) are exempt.
 - **Bleed** — an inline element butting against bare text with no separator, so two
   words run together into one (e.g. `helloWorld` where `hello World` was meant).
 - **Anchor defects** — anchors with no visible text, anchors that close mid-word
@@ -54,7 +74,7 @@ surrounding context. What it looks for:
   shouldn't appear in the raw HTML.
 - **Malformed HTML** — content before the doctype, and HTML parse errors.
 - **CMS template authoring defects** — structural mistakes that come from the
-  template, not the content.
+  template, not the content, including unbalanced `{{ }}` binding fences.
 - **Language mismatch** — a page whose declared language doesn't match its text.
 
 ---
