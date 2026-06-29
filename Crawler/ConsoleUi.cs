@@ -910,6 +910,37 @@ namespace Crawler
 			WriteSuffixAndFinishLine(suffix);
 		}
 
+		// Two-colour variant of WriteLineWithHighlight for mixed-alphabet (homoglyph)
+		// findings: the offending character(s) at offenderOffsets render on the red
+		// alarm fill; the rest of the word on the DarkCyan "structural" fill — the
+		// same blue/red grammar as the split-word highlighter, so an operator who has
+		// seen one reads the other without knowing the language. A single red glyph
+		// against a calm-blue word says "only THIS is wrong", which is the point.
+		// Offsets are character indices into `hit`. Reuses the established Highlight*
+		// constants; White FG throughout. Falls back to the plain single-colour
+		// highlight when there are no offenders to mark.
+		internal static void WriteLineWithOffenderHighlight(
+			string prefix, string hit, IReadOnlyList<int> offenderOffsets, string suffix)
+		{
+			if (offenderOffsets == null || offenderOffsets.Count == 0)
+			{
+				WriteLineWithHighlight(prefix, hit, suffix);
+				return;
+			}
+
+			var offenders = new HashSet<int>(offenderOffsets);
+			Console.Write(prefix);
+			Console.ForegroundColor = HighlightFgTriage; // White
+			for (int i = 0; i < hit.Length; i++)
+			{
+				Console.BackgroundColor = offenders.Contains(i) ? HighlightBgTriage : HighlightBgSplitInside;
+				Console.Write(hit[i]);
+			}
+
+			Console.ResetColor();
+			WriteSuffixAndFinishLine(suffix);
+		}
+
 		// Writes the (plain) suffix, then explicitly paints the rest of the current
 		// row with default-background spaces before the newline. Reordering the
 		// newline after ResetColor() was not enough on conhost: when a row that

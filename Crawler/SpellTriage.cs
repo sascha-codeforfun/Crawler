@@ -113,6 +113,35 @@ namespace Crawler
 		}
 
 		/// <summary>
+		/// Refuses an add of <paramref name="word"/> to the user/site dictionary when it
+		/// carries a character the STRICT policy rejects, and tells the operator to use
+		/// the foreign dictionary instead (after research). Returns true if refused (caller
+		/// must not write); false if the word is clean and the add may proceed. Validating
+		/// here — at the decision point — stops a foreign-script word silently
+		/// contaminating the file and halting the next load. Same CharacterValidator.Scan
+		/// the dictionary files are guarded with, so the two standards cannot drift.
+		/// </summary>
+		private static bool RefuseForeignWord(string word, string dictName, string foreignDictionaryFileName)
+		{
+			var violation = CharacterValidator.FirstStrictViolation(word);
+			if (violation == null)
+			{
+				return false; // clean — caller proceeds with the add
+			}
+
+			var cp = $"U+{(int)violation.Character:X4}";
+			var desc = violation.CharName == cp
+				? $"{cp} ('{violation.Character}')"
+				: $"{cp} {violation.CharName}";
+
+			ConsoleUi.WriteWarning(
+				$"Token '{word}' contains {desc}, which the {dictName} dictionary does not allow.");
+			ConsoleUi.WriteWarning(
+				$"Add it to {foreignDictionaryFileName} manually after researching it.");
+			return true;
+		}
+
+		/// <summary>
 		/// Renders a 300-char raw HTML context excerpt centred on the flagged word,
 		/// for the [M] More handler. Idempotent — re-displays the same context on
 		/// every press, no flag-flipping (the fragile earlier pattern). Word-boundary
@@ -376,7 +405,8 @@ namespace Crawler
 			IReadOnlyList<WordTicket>? spellTickets = null,
 			string localisationComment = "Translation missing — content not localised for page language",
 			string downloadDirectory = "",
-			IReadOnlyList<CrawlHistoryDiagnosticHeaderExtractor>? headerExtractors = null)
+			IReadOnlyList<CrawlHistoryDiagnosticHeaderExtractor>? headerExtractors = null,
+			string foreignDictionaryFileName = "user_foreign_languages.dic")
 		{
 			// A null ticket set means this process's harvest did not complete (threw or did not
 			// run). There is nothing trustworthy to reconcile the ledger against, so bail without
@@ -520,11 +550,35 @@ namespace Crawler
 						valueColor: isPlaceholder ? System.ConsoleColor.DarkYellow : (System.ConsoleColor?)null);
 					ConsoleUi.WriteUrlField(ticket.Url, urlHighlightRules);
 
+					// Enrichment region — when a finding carries an explanation (e.g. a
+					// mixed-alphabet/homoglyph defect) surface it prominently near the top so a
+					// non-fluent operator GRASPS it before deciding to ticket. A cyan divider opens
+					// the region; an amber headline then calm white prose. The offending character
+					// is also marked red in the occurrence below.
+					var enrichCtx = new Crawler.SpellCheck.SpellEnrichmentContext(
+						ticket.Word,
+						ticket.Languages,
+						occurrences.Count > 0 ? (occurrences[0].SourcePath ?? string.Empty) : string.Empty);
+					var enrichments = Crawler.SpellCheck.SpellEnrichments.For(enrichCtx);
+					foreach (var enrichment in enrichments)
+					{
+						ConsoleUi.WriteDivider();
+						var marker = enrichment.Confidence == Crawler.SpellCheck.EnrichmentConfidence.Certain ? "⛔" : "ℹ";
+						var head = enrichment.Lines.Count > 0 ? $"{marker} {enrichment.Lines[0]}" : marker;
+						ConsoleUi.WriteWarningBlock(head, enrichment.Lines.Skip(1));
+					}
+
+					var offenderOffsets = enrichments
+						.SelectMany(e => e.HighlightOffsets)
+						.Distinct()
+						.OrderBy(i => i)
+						.ToList();
+
 					// Every occurrence of this word on the page (from the engine ticket), each with
 					// its location label and the word highlighted in its own excerpt.
 					foreach (var occ in occurrences)
 					{
-						WriteOccurrence(ticket.Word, occ);
+						WriteOccurrence(ticket.Word, occ, offenderOffsets);
 					}
 
 					ConsoleUi.WriteField("Language", ticket.Languages);
@@ -628,7 +682,17 @@ namespace Crawler
 
 					var ticketRef = ConsoleTriage.AskFreeText("Ticket reference (optional, Enter to skip): ");
 
-					UpsertSpelling(ledger, BuildDecision(ticket, "pending", ticketRef, comment, today));
+					// Fold any enrichment note into the ticket comment so the operator's
+					// comprehension travels into TicketText.log with the raised ticket.
+					var ticketEnrichNote = Crawler.SpellCheck.SpellEnrichments.TicketNote(
+						new Crawler.SpellCheck.SpellEnrichmentContext(
+							ticket.Word,
+							ticket.Languages,
+							ticket.Occurrences.Count > 0 ? (ticket.Occurrences[0].SourcePath ?? string.Empty) : string.Empty));
+					var ticketComment = string.IsNullOrEmpty(ticketEnrichNote)
+						? comment
+						: (string.IsNullOrEmpty(comment) ? ticketEnrichNote : ticketEnrichNote + System.Environment.NewLine + comment);
+					UpsertSpelling(ledger, BuildDecision(ticket, "pending", ticketRef, ticketComment, today));
 					decidedKeys.Add(key);
 					IssueTracking.Save(issueTrackingPath, ledger);
 
@@ -682,6 +746,12 @@ namespace Crawler
 					else if (wKey == ConsoleKey.U)
 					{
 						// Dictionary add IS the fix — the word is gone next run, so no row is written.
+						if (RefuseForeignWord(ticket.Word, "user", foreignDictionaryFileName))
+						{
+							ConsoleUi.WriteBlank();
+							continue; // refused — left undecided, resurfaces next run
+						}
+
 						var added = AppendToDictionary(userDictionaryPath, ticket.Word);
 						wordsAddedToDictionary.Add(ticket.Word);
 						ConsoleUi.WriteSuccess(added
@@ -691,6 +761,12 @@ namespace Crawler
 					}
 					else if (wKey == ConsoleKey.S)
 					{
+						if (RefuseForeignWord(ticket.Word, "site", foreignDictionaryFileName))
+						{
+							ConsoleUi.WriteBlank();
+							continue; // refused — left undecided, resurfaces next run
+						}
+
 						var added = AppendToDictionary(siteDictionaryPath, ticket.Word);
 						wordsAddedToDictionary.Add(ticket.Word);
 						ConsoleUi.WriteSuccess(added
@@ -999,7 +1075,7 @@ namespace Crawler
 		/// <see cref="ScriptExcerptLocator"/>, because their excerpt is raw source that may carry JS
 		/// escapes the decoded word would not match directly. Caller holds the console lock.
 		/// </summary>
-		private static void WriteOccurrence(string word, TicketOccurrence occ)
+		private static void WriteOccurrence(string word, TicketOccurrence occ, IReadOnlyList<int>? offenderOffsets = null)
 		{
 			if (!string.IsNullOrEmpty(occ.SourcePath))
 			{
@@ -1070,7 +1146,19 @@ namespace Crawler
 				var after = excerpt[(wordIdx + hitLength)..];
 				// Prefix matches WriteField's "{Indent}{label,-9}: " so the highlighted Context
 				// line aligns with the other fields.
-				ConsoleUi.WriteLineWithHighlight($"{ConsoleUi.Indent}{"Context",-9}: {before}", hit, after);
+				var prefix = $"{ConsoleUi.Indent}{"Context",-9}: {before}";
+				// Two-colour the word (rest DarkCyan, offender(s) Red) when the finding carries
+				// in-word offsets AND the matched span is the word 1:1 so offsets align. Script
+				// spans that decode through escapes (hitLength != word.Length) fall back to the
+				// plain single-colour highlight.
+				if (offenderOffsets != null && offenderOffsets.Count > 0 && hitLength == word.Length)
+				{
+					ConsoleUi.WriteLineWithOffenderHighlight(prefix, hit, offenderOffsets, after);
+				}
+				else
+				{
+					ConsoleUi.WriteLineWithHighlight(prefix, hit, after);
+				}
 			}
 			else
 			{

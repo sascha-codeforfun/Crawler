@@ -732,7 +732,7 @@
 
     // Maximum character length for quote excerpts when ContentQualityQuoteFullSentence
     // is true. Increase if excerpts are still truncated for long sentences.
-    "ContentQualityQuoteMaxExcerpt": 400
+    "ContentQualityMaxExcerpt": 400
   },
 
   // ═══════════════════════════════════════════════════════════════════════════

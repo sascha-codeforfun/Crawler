@@ -51,59 +51,134 @@ namespace Crawler.Quality
 		private const int ContainerTagMaxLength = 200;
 
 		/// <summary>
-		/// True for character codepoints classed as architect-emitted invisibles:
-		/// zero-widths, bidi controls, line/paragraph separators, C0/C1 controls,
-		/// and BOM/ZWNBSP when it appears outside its leading-byte role. Excludes
-		/// CR/LF/TAB which are normal whitespace in HTML source.
+		/// Single source of truth for the invisible-character set shared by the
+		/// editor-class detector (ControlChars, surfaced in triage) and the
+		/// architect-class detector (INVISIBLE_CHAR_IN_BODY, in the CMS-defect CSV).
+		/// Returns the codepoint and an operator-readable name, or null for visible
+		/// content. CR/LF/TAB are anomalous in title/meta attribute values but
+		/// ordinary insignificant whitespace in body prose and markup, so the caller
+		/// passes includeWhitespaceControls = true only for the former; everything
+		/// below is unconditional. Names match the editor detector's historical
+		/// labels (its cards and tests are unaffected); the architect detector keeps
+		/// its own naming and consults this only for membership.
 		/// </summary>
-		internal static bool IsArchitectClassInvisible(char ch)
+		internal static (int Codepoint, string Name)? ClassifyInvisible(
+			char ch, bool includeWhitespaceControls)
 		{
 			if (ch == '\r' || ch == '\n' || ch == '\t')
 			{
-				return false;
+				if (!includeWhitespaceControls)
+				{
+					return null;
+				}
+
+				if (ch == '\r')
+				{
+					return (ch, "CR (U+000D)");
+				}
+
+				if (ch == '\n')
+				{
+					return (ch, "LF (U+000A)");
+				}
+
+				return (ch, "TAB (U+0009)");
 			}
 
 			if (ch < 0x20)
 			{
-				return true;                              // C0 controls
+				return (ch, $"C0 control (U+{(int)ch:X4})");
+			}
+
+			if (ch == '\u007F')
+			{
+				return (ch, "DEL (U+007F)");
 			}
 
 			if (ch >= 0x80 && ch <= 0x9F)
 			{
-				return true;               // C1 controls
+				return (ch, $"C1 control (U+{(int)ch:X4})");
 			}
 
-			if (ch == '\u200B' || ch == '\u200C' || ch == '\u200D')
+			if (ch == '\u00AD')
 			{
-				return true; // ZWSP/ZWNJ/ZWJ
+				return (ch, "SHY (U+00AD)");
 			}
 
-			if (ch == '\u2060')
+			if (ch == '\u061C')
 			{
-				return true;                         // WJ
+				return (ch, "ALM (U+061C)");
 			}
 
-			if (ch == '\uFEFF')
+			if (ch == '\u200B')
 			{
-				return true;                         // ZWNBSP / embedded BOM
+				return (ch, "ZWSP (U+200B)");
+			}
+
+			if (ch == '\u200C')
+			{
+				return (ch, "ZWNJ (U+200C)");
+			}
+
+			if (ch == '\u200D')
+			{
+				return (ch, "ZWJ (U+200D)");
+			}
+
+			if (ch == '\u200E')
+			{
+				return (ch, "LRM (U+200E)");
+			}
+
+			if (ch == '\u200F')
+			{
+				return (ch, "RLM (U+200F)");
 			}
 
 			if (ch >= '\u202A' && ch <= '\u202E')
 			{
-				return true;       // bidi controls
+				return (ch, $"bidi control (U+{(int)ch:X4})");
+			}
+
+			if (ch == '\u2060')
+			{
+				return (ch, "WJ (U+2060)");
+			}
+
+			if (ch >= '\u2061' && ch <= '\u2064')
+			{
+				return (ch, $"invisible math (U+{(int)ch:X4})");
 			}
 
 			if (ch >= '\u2066' && ch <= '\u2069')
 			{
-				return true;       // bidi isolates
+				return (ch, $"bidi isolate (U+{(int)ch:X4})");
 			}
 
-			if (ch == '\u2028' || ch == '\u2029')
+			if (ch == '\u2028')
 			{
-				return true;       // line/paragraph separators
+				return (ch, "LINE SEPARATOR (U+2028)");
 			}
 
-			return false;
+			if (ch == '\u2029')
+			{
+				return (ch, "PARAGRAPH SEPARATOR (U+2029)");
+			}
+
+			if (ch == '\uFEFF')
+			{
+				return (ch, "BOM/ZWNBSP (U+FEFF)");
+			}
+
+			return null;
 		}
+
+		/// <summary>
+		/// Architect-class membership: invisibles that matter in non-prose body and
+		/// template markup. Excludes CR/LF/TAB (ordinary HTML-source whitespace).
+		/// Delegates to <see cref="ClassifyInvisible"/>.
+		/// </summary>
+		internal static bool IsArchitectClassInvisible(char ch)
+			=> ClassifyInvisible(ch, includeWhitespaceControls: false).HasValue;
 	}
 }

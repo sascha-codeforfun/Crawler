@@ -29,7 +29,13 @@ namespace Crawler.Tests.SpellCheck
 		[InlineData("Hello", true)]
 		[InlineData("well-known", true)]
 		[InlineData("Straße", true)]
+		[InlineData("привет", true)]       // Cyrillic
+		[InlineData("Ελληνικά", true)]     // Greek
+		[InlineData("مرحبا", true)]        // Arabic
+		[InlineData("café", true)]         // precomposed diacritic (NFC)
+		[InlineData("cafe\u0301", true)]   // decomposed diacritic (NFD): e + combining acute
 		[InlineData("abc123", false)]   // digits are not word chars here
+		[InlineData("café123", false)]  // digits still rejected, even with a diacritic
 		[InlineData("123", false)]
 		[InlineData("a_b", false)]      // underscore not allowed
 		public void IdentifyWord_MatchesExpectedShape(string token, bool expected)

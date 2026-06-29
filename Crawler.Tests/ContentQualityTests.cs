@@ -36,7 +36,7 @@ namespace Crawler.Tests
 		{
 			ContentQualityExcerptRadius    = 120,
 			ContentQualityQuoteFullSentence = false,  // keep tests deterministic
-			ContentQualityQuoteMaxExcerpt  = 400,
+			ContentQualityMaxExcerpt  = 400,
 		};
 
 		// ── CheckQuotes — system mixing ───────────────────────────────────────

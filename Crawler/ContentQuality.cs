@@ -249,7 +249,15 @@ namespace Crawler
 
 				if (config.CheckControlCharsInContent)
 				{
-					foreach (var issue in ControlChars.Check(filename, doc))
+					foreach (var issue in ControlChars.Check(filename, doc, config))
+					{
+						bag.Add(issue);
+					}
+				}
+
+				if (config.ResolvedCheckDecomposition != DecompositionMode.Off)
+				{
+					foreach (var issue in Decomposition.Check(filename, doc, config))
 					{
 						bag.Add(issue);
 					}

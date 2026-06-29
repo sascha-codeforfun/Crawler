@@ -226,6 +226,12 @@ namespace Crawler.Tests.Quality
 		[InlineData('\u2069')] // PDI (bidi isolate)
 		[InlineData('\u0000')] // NUL (C0)
 		[InlineData('\u0085')] // NEL (C1)
+		[InlineData('\u007F')] // DEL
+		[InlineData('\u00AD')] // SHY
+		[InlineData('\u061C')] // ALM
+		[InlineData('\u200E')] // LRM
+		[InlineData('\u200F')] // RLM
+		[InlineData('\u2062')] // INVISIBLE TIMES (math)
 		public void IsArchitectClassInvisible_KnownInvisibles_ReturnTrue(char ch)
 		{
 			Assert.True(DefectDetectionHelpers.IsArchitectClassInvisible(ch));

@@ -68,6 +68,40 @@ namespace Crawler.Html
 			return ISO6391().IsMatch(language);
 		}
 
+		/// <summary>
+		/// Resolves the language declared CLOSEST to <paramref name="node"/> by walking up the
+		/// ancestor chain and returning the first valid <c>lang</c> attribute — child overrides
+		/// ancestor, per HTML inheritance — normalised "de-DE" → "de". Falls back to
+		/// <paramref name="fallback"/> when no ancestor declares a usable lang (the page-level
+		/// branch language, itself already resolved from &lt;html lang&gt; / meta / default, so a
+		/// node with no nearer island still lands on the page language). Honours per-element lang
+		/// islands so a word is checked against the dictionary for the language it is written in.
+		/// </summary>
+		public static string NearestElementLanguage(HtmlNode? node, string fallback)
+		{
+			for (HtmlNode? current = node;
+				current != null && current.NodeType != HtmlNodeType.Document;
+				current = current.ParentNode)
+			{
+				if (current.NodeType != HtmlNodeType.Element)
+				{
+					continue;
+				}
+
+				var raw = current.GetAttributeValue("lang", string.Empty)?.Trim();
+				if (!string.IsNullOrWhiteSpace(raw))
+				{
+					var code = raw.Split('-')[0].ToLowerInvariant();
+					if (IsISO6391(code))
+					{
+						return code;
+					}
+				}
+			}
+
+			return fallback;
+		}
+
 		[GeneratedRegex(@"^[a-z]{2}$")]
 		private static partial Regex ISO6391();
 	}

@@ -23,6 +23,7 @@ namespace Crawler.Lexicon
 			string affFileName,
 			string customDictionaryFile,
 			string customSiteDictionaryFile,
+			string foreignDictionaryFile = "",
 			bool silent = false)
 		{
 			var systemWordList = WordList.CreateFromFiles(dictionaryFileName, affFileName);
@@ -70,7 +71,44 @@ namespace Crawler.Lexicon
 				}
 			}
 
+			if (!string.IsNullOrEmpty(foreignDictionaryFile) && File.Exists(foreignDictionaryFile))
+			{
+				CharacterValidator.ValidateForeignDictionaryFileHalt(foreignDictionaryFile, silent);
+
+				foreach (var word in ReadForeignDictionaryWords(foreignDictionaryFile))
+				{
+					bundle.SharedForeign.Add(word);
+				}
+			}
+
 			return bundle;
+		}
+
+		// Parse a foreign-dictionary file into its bare words. Strips a // comment
+		// (whole-line or trailing) and a leading ! pin via CharacterValidator, then skips
+		// pure-comment / blank / affix-flag (/) lines. The // strip runs BEFORE the /-skip
+		// so a commented word isn't mistaken for an affix line and dropped. Extracted from
+		// Load so the parse is testable without a System dictionary.
+		internal static List<string> ReadForeignDictionaryWords(string filePath)
+		{
+			var words = new List<string>();
+			if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+			{
+				return words;
+			}
+
+			foreach (var raw in File.ReadLines(filePath, Encoding.UTF8))
+			{
+				var word = CharacterValidator.ForeignDictionaryWord(raw);
+				if (string.IsNullOrEmpty(word) || word.Contains('/'))
+				{
+					continue;
+				}
+
+				words.Add(word);
+			}
+
+			return words;
 		}
 	}
 }

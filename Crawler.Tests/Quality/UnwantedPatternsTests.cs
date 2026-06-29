@@ -9,7 +9,7 @@ namespace Crawler.Tests.Quality
 		{
 			ContentQualityExcerptRadius    = 120,
 			ContentQualityQuoteFullSentence = false,  // keep tests deterministic
-			ContentQualityQuoteMaxExcerpt  = 400,
+			ContentQualityMaxExcerpt  = 400,
 		};
 
 		// ── Check ─────────────────────────────────────────────
@@ -192,6 +192,130 @@ namespace Crawler.Tests.Quality
 				"missing closing ')%' — patterns: %(, produkt., p_name";
 			var result = ContentQualityTriage.ExtractHighlightPatterns(word);
 			Assert.Equal(new[] { "%(", "produkt.", "p_name" }, result);
+		}
+
+		// ── OnlyFlagUnbalanced (envelope-only): well-formed binding silent, malformed fires ──
+
+		private static List<ContentUnwantedPattern> MustacheBinding() => new()
+		{
+			new()
+			{
+				Category = "Security", Name = "Mustache", GroupPatterns = true,
+				CaseSensitive = true, OnlyFlagUnbalanced = true, Patterns = ["{{", "}}"]
+			}
+		};
+
+		[Theory]
+		[InlineData("in unserer {{link1}} und dem {{link2}}.")] // both well-formed — the real-data fix
+		[InlineData("text {{foo}} text")]                       // well-formed
+		[InlineData("path {{object.name}} here")]               // well-formed dotted
+		[InlineData("Ihre Suche ergab {n} Treffer.")]          // single-brace placeholder — not a doubled fence
+		[InlineData("a {foo broke")]                            // lone single opener brace
+		[InlineData("broke foo} here")]                         // lone single closer brace
+		[InlineData("<p>no braces here at all</p>")]            // no binding
+		public void OnlyFlagUnbalanced_WellFormedOrNoFullFence_Silent(string html)
+		{
+			var issues = UnwantedPatterns.Check("f.html", html, MustacheBinding(), DefaultConfig()).ToList();
+			Assert.Empty(issues);
+		}
+
+		[Theory]
+		[InlineData("text {foo}} text")]                        // single opener brace
+		[InlineData("balance account_balance}} broke")]         // opener missing
+		[InlineData("text {{foo} text")]                        // single closer brace
+		[InlineData("text {{foo broke")]                        // closer missing
+		public void OnlyFlagUnbalanced_Malformed_Fires(string html)
+		{
+			var issues = UnwantedPatterns.Check("f.html", html, MustacheBinding(), DefaultConfig()).ToList();
+			var issue = Assert.Single(issues);
+			Assert.Equal("UNWANTED_PATTERN", issue.IssueType);
+		}
+
+		[Theory]
+		[InlineData("@media (max-width:680px){.nav a.txt{display:none}}")] // CSS — ':' flank
+		[InlineData("...\\\"section\\\": 2}},{\\\"id\\\": \\\"f1\\\"...")]  // JSON — ',' after }}
+		[InlineData("...&quot;s&quot;:null}}'>")]                          // JSON — ':' / '\'' flanks
+		[InlineData("...&#34;buttonlabelnext&#34;:&#34;Weiter&#34;}}\">")] // encoded — '\"' flank
+		public void OnlyFlagUnbalanced_StructuralBraces_Ignored(string html)
+		{
+			var issues = UnwantedPatterns.Check("f.html", html, MustacheBinding(), DefaultConfig()).ToList();
+			Assert.Empty(issues);
+		}
+
+		[Fact]
+		public void OnlyFlagUnbalanced_DefaultFalse_AnyOccurrenceStillFires()
+		{
+			// %( )% must surface even when perfectly paired — the delimiter must never reach
+			// the user. OnlyFlagUnbalanced defaults false, so the binding-shape gate is bypassed.
+			var patterns = new List<ContentUnwantedPattern>
+			{
+				new()
+				{
+					Category = "Security", Name = "Percent", GroupPatterns = true,
+					CaseSensitive = true, Patterns = ["%(", ")%"]
+				}
+			};
+			var issues = UnwantedPatterns.Check("f.html", "<p>%(institut.name)%</p>", patterns, DefaultConfig()).ToList();
+			Assert.Single(issues);
+		}
+
+		// ── CheckStyle / CheckScript: per-pattern region opt-out ──
+
+		private static List<ContentUnwantedPattern> MustacheStyleOff() => new()
+		{
+			new()
+			{
+				Category = "Security", Name = "Mustache", GroupPatterns = true, CaseSensitive = true,
+				OnlyFlagUnbalanced = true, CheckStyle = false, Patterns = ["{{", "}}"]
+			}
+		};
+
+		// A CSS block close like "30px 1fr}}" is a space-flanked dangling-close shape — it fires
+		// by default, which is the real-corpus false positive CheckStyle:false removes.
+		private const string StyledCssClose =
+			"<style>@media (max-width:560px){li.row{grid-template-columns:30px 1fr}} </style><p>clean body</p>";
+
+		[Fact]
+		public void CheckStyle_DefaultTrue_FiresInsideStyle()
+		{
+			var issues = UnwantedPatterns.Check("f.html", StyledCssClose, MustacheBinding(), DefaultConfig()).ToList();
+			Assert.Single(issues);
+		}
+
+		[Fact]
+		public void CheckStyle_False_SilentInsideStyle()
+		{
+			var issues = UnwantedPatterns.Check("f.html", StyledCssClose, MustacheStyleOff(), DefaultConfig()).ToList();
+			Assert.Empty(issues);
+		}
+
+		[Fact]
+		public void CheckStyle_False_StillFiresInBody()
+		{
+			// Masking <style> is surgical: a real malformed binding in the body still fires.
+			const string html = "<style>li{grid:30px 1fr}}</style><p>balance account_balance}} broke</p>";
+			var issues = UnwantedPatterns.Check("f.html", html, MustacheStyleOff(), DefaultConfig()).ToList();
+			var issue = Assert.Single(issues);
+			Assert.Equal("UNWANTED_PATTERN", issue.IssueType);
+		}
+
+		[Fact]
+		public void CheckScript_False_SilentInsideScript_DefaultFires()
+		{
+			const string html = "<script>foo bar}} baz</script><p>clean</p>";
+			var on = UnwantedPatterns.Check("f.html", html, MustacheBinding(), DefaultConfig()).ToList();
+			Assert.Single(on); // default CheckScript:true sees the space-flanked }} in script
+
+			var off = new List<ContentUnwantedPattern>
+			{
+				new()
+				{
+					Category = "Security", Name = "Mustache", GroupPatterns = true, CaseSensitive = true,
+					OnlyFlagUnbalanced = true, CheckScript = false, Patterns = ["{{", "}}"]
+				}
+			};
+			var offIssues = UnwantedPatterns.Check("f.html", html, off, DefaultConfig()).ToList();
+			Assert.Empty(offIssues);
 		}
 	}
 }

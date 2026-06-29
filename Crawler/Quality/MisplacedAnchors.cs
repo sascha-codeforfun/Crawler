@@ -53,7 +53,7 @@ namespace Crawler.Quality
 						Excerpt.Centred(
 							anchor.ParentNode?.OuterHtml ?? anchor.OuterHtml,
 							anchor.OuterHtml,
-							config.ContentQualityQuoteMaxExcerpt));
+							config.ContentQualityMaxExcerpt));
 				}
 
 				// ── ADJACENT_ANCHOR (was MISPLACED_ANCHOR_SPLIT) ────────────────
@@ -112,7 +112,7 @@ namespace Crawler.Quality
 					var anchorAt = source.IndexOf(anchor.OuterHtml, StringComparison.Ordinal);
 					var boundaryAt = anchorAt >= 0 ? anchorAt + anchor.OuterHtml.Length : source.Length / 2;
 
-					var excerpt = Excerpt.Centred(source, boundaryAt, config.ContentQualityQuoteMaxExcerpt);
+					var excerpt = Excerpt.Centred(source, boundaryAt, config.ContentQualityMaxExcerpt);
 
 					// [KEEP] String-evidence post-filter: require the literal
 					// "</a><a" to appear in the rendered excerpt before firing.

@@ -35,6 +35,11 @@ namespace Crawler.Tests.Quality
 		[InlineData('\u200C', "[INVISIBLE ZERO-WIDTH NON-JOINER U+200C]")]
 		[InlineData('\u200D', "[INVISIBLE ZERO-WIDTH JOINER U+200D]")]
 		[InlineData('\uFEFF', "[INVISIBLE BOM U+FEFF]")]
+		[InlineData('\u00AD', "[INVISIBLE SOFT HYPHEN U+00AD]")]
+		[InlineData('\u007F', "[INVISIBLE DEL U+007F]")]
+		[InlineData('\u2060', "[INVISIBLE WORD JOINER U+2060]")]
+		[InlineData('\u200E', "[INVISIBLE BIDI MARK U+200E]")]
+		[InlineData('\u2062', "[INVISIBLE MATH U+2062]")]
 		public void Truncate_NamedInvisible_UsesVerboseMarker(char ch, string expected)
 		{
 			Assert.Equal(expected, LogExcerpt.Truncate(ch.ToString()));

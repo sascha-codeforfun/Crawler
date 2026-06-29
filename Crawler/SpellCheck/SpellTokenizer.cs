@@ -143,7 +143,13 @@ namespace Crawler.SpellCheck
 			RegexOptions.Compiled | RegexOptions.IgnoreCase)]
 		private static partial Regex UrlOrDomainPattern();
 
-		[GeneratedRegex(@"^[a-zA-ZäöüßÄÖÜ-]+(-[a-zA-ZäöüßÄÖÜ]+)*$", RegexOptions.Compiled)]
+		// Accept a word token in ANY script the dictionaries cover: \p{L} = any
+		// Unicode letter (Latin incl. diacritics, Cyrillic, Greek, Arabic, …),
+		// \p{M} = combining marks (so an NFD-decomposed diacritic passes the gate).
+		// Still rejects digits, underscore and symbols; internal hyphens only.
+		// A token that clears this gate is handed to the script-agnostic dictionary
+		// (Hunspell Bundle.Check) for the actual spelling decision.
+		[GeneratedRegex(@"^[\p{L}\p{M}-]+(-[\p{L}\p{M}]+)*$", RegexOptions.Compiled)]
 		private static partial Regex WordIdentifier();
 	}
 }

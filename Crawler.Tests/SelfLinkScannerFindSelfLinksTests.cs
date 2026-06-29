@@ -10,8 +10,9 @@ namespace Crawler.Tests
 	/// page URLs, runs the scan, then asserts on the written results log
 	/// (File|FileUrl|LinkFound|ContextSnippet, pipe-delimited, UTF-8 BOM).
 	///
-	/// A link counts as a self-link only when it is rooted ("/…") or absolute on
-	/// the same origin AND its path equals the page's own path AND it carries no
+	/// A link counts as a self-link when it resolves to the same origin — rooted
+	/// ("/…"), absolute same-origin, or document-relative ("x.html", "./x.html") —
+	/// AND its resolved path equals the page's own path AND it carries no
 	/// fragment; ignored query keys suppress it. The ExtractHtmlContextSnippet
 	/// helper is covered by SelfLinkScannerSnippetTests; this file covers the scan
 	/// driver and the self-link decision. All fixtures are SYNTHETIC.
@@ -135,10 +136,32 @@ namespace Crawler.Tests
 			Assert.Empty(ScanOnePage("<a href=\"https://other.test/page\">x</a>"));
 		}
 
+		// D109: document-relative self-links now resolve against the page URL and
+		// fire — previously dropped by a same-origin pre-gate that only admitted
+		// rooted/absolute hrefs (this test asserted the old NotReported behavior).
 		[Fact]
-		public void RelativeNonRooted_NotReported()
+		public void RelativeNonRooted_Reported()
 		{
-			Assert.Empty(ScanOnePage("<a href=\"page\">x</a>"));
+			var rows = ScanOnePage("<a href=\"page\">x</a>");
+			var c = Cols(Assert.Single(rows));
+			Assert.Equal("page", c[2]); // LinkFound (raw href)
+		}
+
+		[Fact]
+		public void DotSlashRelativeSelfLink_Reported()
+		{
+			var rows = ScanOnePage("<a href=\"./page\">x</a>");
+			var c = Cols(Assert.Single(rows));
+			Assert.Equal("./page", c[2]);
+		}
+
+		[Fact]
+		public void RelativeSelfLinkWithQuery_Reported()
+		{
+			// Bare-filename self-link carrying a non-ignored query still fires.
+			var rows = ScanOnePage("<a href=\"page?x=1\">x</a>",
+				ignoreQueryKeys: new List<string>());
+			Assert.Single(rows);
 		}
 
 		[Fact]

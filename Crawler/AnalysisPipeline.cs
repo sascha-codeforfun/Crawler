@@ -44,6 +44,13 @@ namespace Crawler
 		private static readonly Dictionary<string, Bundle> _dictionaryBundles =
 			new(StringComparer.OrdinalIgnoreCase);
 		private static List<string> _spellCheckExcludedUrls = [];
+
+		// One-line summary of the foreign-language dictionary's load state, shown next to
+		// the Dictionaries banner. The foreign dict is opt-in (empty default), and a
+		// silently-skipped one was a real "why isn't this working" trap — so its state is
+		// made visible: off / a word count / NOT FOUND.
+		private static string _foreignDictionarySummary = "off (CustomForeignDictionaryFile not set)";
+
 		private static readonly object _fileLock = new();
 
 		// ── Top-level orchestrator ───────────────────────────────────────────
@@ -127,6 +134,7 @@ namespace Crawler
 			ConsoleUi.WriteStepRow("Languages",
 				_dictionaryBundles.Count > 0 ? string.Join(" · ", _dictionaryBundles.Keys) : "(none)");
 			ConsoleUi.WriteStepRow("Dictionaries", $"{_dictionaryBundles.Count} loaded");
+			ConsoleUi.WriteStepRow("Foreign words", _foreignDictionarySummary);
 
 			using (Logger.QuietConsole())
 			{
@@ -514,7 +522,8 @@ namespace Crawler
 			Logger.LogInfo("Load dictionaries.");
 			try
 			{
-				PreloadDictionaries(urlDirectory, config.CustomDictionaryFile, config.DictionaryBundles);
+				PreloadDictionaries(urlDirectory, config.CustomDictionaryFile, config.DictionaryBundles,
+					config.CustomForeignDictionaryFile);
 				_spellCheckExcludedUrls = config.SpellCheckExcludedUrls;
 
 				// Fail-fast: every language named in PageLanguageOverrides must have a loaded bundle.
@@ -899,7 +908,10 @@ namespace Crawler
 				ctx.LastSpellTickets,
 				config.TriageLocalisationComment,
 				ctx.FileDownloadDirectory,
-				config.CrawlHistoryDiagnostic.HeaderExtractors);
+				config.CrawlHistoryDiagnostic.HeaderExtractors,
+				string.IsNullOrWhiteSpace(config.CustomForeignDictionaryFile)
+					? "user_foreign_languages.dic"
+					: config.CustomForeignDictionaryFile);
 		}
 
 		// ── Step 25: Ticket draft / text generation ──────────────────────────
@@ -988,10 +1000,36 @@ namespace Crawler
 		}
 
 		private static void PreloadDictionaries(
-			string urlDirectory, string customDictionaryFile, List<DictionaryBundleConfig> bundles)
+			string urlDirectory, string customDictionaryFile, List<DictionaryBundleConfig> bundles,
+			string foreignDictionaryFile)
 		{
 			var siteSpecificDictionary = $"dictionaries\\{urlDirectory}.dic";
 			var customDictionaryPath = $"dictionaries\\{customDictionaryFile}";
+			var foreignDictionaryPath = string.IsNullOrWhiteSpace(foreignDictionaryFile)
+				? string.Empty
+				: $"dictionaries\\{foreignDictionaryFile}";
+
+			// Make the opt-in foreign dictionary's state visible: off when unset, a word
+			// count when loaded, and a NAMED WARNING when configured but not found — so a
+			// missing/misnamed file announces itself instead of silently doing nothing.
+			if (string.IsNullOrWhiteSpace(foreignDictionaryFile))
+			{
+				_foreignDictionarySummary = "off (CustomForeignDictionaryFile not set)";
+			}
+			else if (!File.Exists(foreignDictionaryPath))
+			{
+				_foreignDictionarySummary = $"NOT FOUND at {foreignDictionaryPath}";
+				Logger.LogWarning(
+					$"CustomForeignDictionaryFile is set to '{foreignDictionaryFile}' but no file was found " +
+					$"at '{foreignDictionaryPath}' — no foreign-language words loaded.");
+			}
+			else
+			{
+				var foreignCount = Loader.ReadForeignDictionaryWords(foreignDictionaryPath).Count;
+				_foreignDictionarySummary = $"{foreignCount} word(s) from {foreignDictionaryFile}";
+				Logger.LogInfo(
+					$"Loaded {foreignCount} foreign-language word(s) from {foreignDictionaryPath}.");
+			}
 
 			if (bundles.Count == 0)
 			{
@@ -1007,12 +1045,19 @@ namespace Crawler
 					continue;
 				}
 
-				_dictionaryBundles[bundle.LanguageCode] = Loader.Load(
+				var loaded = Loader.Load(
 					bundle.DicFile,
 					bundle.AffFile,
 					customDictionaryPath,
 					siteSpecificDictionary,
+					foreignDictionaryPath,
 					CrawlerContext.Silent);
+				_dictionaryBundles[bundle.LanguageCode] = loaded;
+
+				// Expose this dictionary's accept-check to dictionary-dependent enrichers
+				// (e.g. the Arabic alif-hamza roundtrip). Presence here is the runtime
+				// "is language X configured?" signal — an enricher gates on it.
+				Crawler.SpellCheck.EnrichmentDictionaries.Register(bundle.LanguageCode, loaded.Check);
 			}
 		}
 

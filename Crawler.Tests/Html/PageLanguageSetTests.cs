@@ -114,5 +114,30 @@ namespace Crawler.Tests.Html
 			Assert.Equal(new[] { "de", "en" }, set);
 			Assert.NotEqual(1, set.Count);
 		}
+
+		// ── HasOverride ───────────────────────────────────────
+		// True exactly when Resolve would return an override set: a matching prefix with a
+		// non-empty language list (longest key wins, as in Resolve).
+
+		[Fact]
+		public void HasOverride_MatchingPrefix_True()
+		{
+			Assert.True(Crawler.Html.PageLanguageSet.HasOverride(
+				"https://x/de/home/service.html", Overrides()));
+		}
+
+		[Fact]
+		public void HasOverride_NoMatchingPrefix_False()
+		{
+			Assert.False(Crawler.Html.PageLanguageSet.HasOverride(
+				"https://x/en/home/other.html", Overrides()));
+		}
+
+		[Fact]
+		public void HasOverride_NoOverrides_False()
+		{
+			Assert.False(Crawler.Html.PageLanguageSet.HasOverride(
+				"https://x/de/home/service.html", null));
+		}
 	}
 }

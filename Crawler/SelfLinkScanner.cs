@@ -76,23 +76,13 @@ namespace Crawler
 
 						var hrefNormalized = hrefValue.Trim();
 
-						bool startsWithSlash = hrefNormalized.StartsWith('/');
-						bool startsWithDomain = false;
-
-						if (!startsWithSlash)
-						{
-							if (Uri.TryCreate(hrefNormalized, UriKind.Absolute, out var hrefUri))
-							{
-								var hrefOrigin = hrefUri.GetLeftPart(UriPartial.Authority);
-								startsWithDomain = string.Equals(baseOrigin, hrefOrigin, StringComparison.OrdinalIgnoreCase);
-							}
-						}
-
-						if (!(startsWithSlash || startsWithDomain))
-						{
-							continue;
-						}
-
+						// Resolve to absolute first, then gate on the resolved origin.
+						// Absolute hrefs are taken as-is; rooted ("/x"), document-relative
+						// ("x.html", "./x.html"), and query-only forms resolve against the
+						// page's own URL. Gating on the resolved authority keeps same-site
+						// self-links in every href form while off-site links and non-http
+						// schemes (mailto:/tel:/javascript:) resolve to a different or empty
+						// authority and drop out here.
 						Uri resolvedHrefUri;
 						try
 						{
@@ -106,6 +96,12 @@ namespace Crawler
 							}
 						}
 						catch
+						{
+							continue;
+						}
+
+						var resolvedOrigin = resolvedHrefUri.GetLeftPart(UriPartial.Authority);
+						if (!string.Equals(baseOrigin, resolvedOrigin, StringComparison.OrdinalIgnoreCase))
 						{
 							continue;
 						}

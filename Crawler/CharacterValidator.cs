@@ -205,6 +205,121 @@ namespace Crawler
 				"See application.log for details.");
 		}
 
+		// ── Foreign-language dictionary: a RELAXED policy ─────────────────────
+		// user_foreign_languages.dic holds researched, comment-justified words from any
+		// script (čovek, öğe, izgūšana, преоразмерявате). The relaxation vs Scan(): allow
+		// any Unicode LETTER, not just the Western allow-list — so foreign letters pass,
+		// but the genuinely awkward characters (invisibles, dash/quote look-alikes, NBSP,
+		// symbols) are NOT letters and still halt. Same data-integrity protection, minus
+		// the Latin-only restriction. Lines may carry a // comment (whole-line or trailing)
+		// and a leading ! pin (allowed for UI consistency with the user/site dicts); both
+		// are stripped before the bare word is scanned.
+
+		// Bare word from a foreign-dictionary line: drop a // comment (whole-line or
+		// trailing), then trim and strip a leading ! pin. Empty = pure comment / blank.
+		public static string ForeignDictionaryWord(string rawLine)
+		{
+			if (string.IsNullOrEmpty(rawLine))
+			{
+				return string.Empty;
+			}
+
+			var commentAt = rawLine.IndexOf("//", StringComparison.Ordinal);
+			var beforeComment = commentAt >= 0 ? rawLine.Substring(0, commentAt) : rawLine;
+			return beforeComment.Trim().TrimStart('!');
+		}
+
+		// Relaxed scan: like Scan() but any Unicode letter is allowed (not just the
+		// Western allow-list). Everything that is neither printable ASCII nor a letter
+		// is flagged — invisibles, dash/quote look-alikes, NBSP, symbols.
+		public static IEnumerable<SuspiciousChar> ScanForeign(string source, string value)
+		{
+			if (string.IsNullOrEmpty(value))
+			{
+				yield break;
+			}
+
+			for (int i = 0; i < value.Length; i++)
+			{
+				var c = value[i];
+
+				if (c >= 32 && c <= 126)
+				{
+					continue; // printable ASCII
+				}
+
+				if (char.IsLetter(c))
+				{
+					continue; // any-script letter — the relaxation
+				}
+
+				var name = KnownBadChars.TryGetValue(c, out var known)
+					? known
+					: $"U+{(int)c:X4}";
+
+				var suggestion = DashLookalikes.Contains(c)
+					? "Replace with a plain ASCII hyphen-minus (-)"
+					: "Remove this character";
+
+				yield return new SuspiciousChar(source, i, c, name, suggestion);
+			}
+		}
+
+		// Validates user_foreign_languages.dic with the relaxed policy, halting on any
+		// suspicious character. Strips the // comment and ! pin before scanning the word,
+		// and skips affix-flag lines (containing /) and pure comments. Prints a red block
+		// before throwing (skipped in --silent mode).
+		public static void ValidateForeignDictionaryFileHalt(string filePath, bool silent)
+		{
+			if (!File.Exists(filePath))
+			{
+				return;
+			}
+
+			List<SuspiciousChar> hits = [];
+			int lineNumber = 0;
+
+			foreach (var raw in File.ReadLines(filePath, System.Text.Encoding.UTF8))
+			{
+				lineNumber++;
+				var word = ForeignDictionaryWord(raw);
+				if (string.IsNullOrEmpty(word) || word.Contains('/'))
+				{
+					continue;
+				}
+
+				var source = $"{Path.GetFileName(filePath)} line {lineNumber} \"{word}\"";
+				foreach (var hit in ScanForeign(source, word))
+				{
+					hits.Add(hit);
+				}
+			}
+
+			if (hits.Count == 0)
+			{
+				return;
+			}
+
+			foreach (var hit in hits)
+			{
+				Logger.LogError(FormatHit(hit));
+			}
+
+			PrintHaltBlock(hits, silent);
+
+			throw new InvalidOperationException(
+				$"Halting: {hits.Count} suspicious character(s) found in {Path.GetFileName(filePath)}. " +
+				"See application.log for details.");
+		}
+
+		// The first character of `word` that the STRICT policy (Scan) would reject, or
+		// null if clean. Used by triage to refuse an add to the user/site dictionary
+		// BEFORE writing — so a foreign-script word can't silently contaminate the file
+		// and halt the next load. Same Scan() the dictionary files are validated with, so
+		// the triage gate and the file gate can never drift.
+		public static SuspiciousChar? FirstStrictViolation(string word) =>
+			Scan(string.Empty, word).FirstOrDefault();
+
 		// ── Invisible-only scan (script-agnostic) ─────────────────────────────
 		// A DIFFERENT policy from Scan() above. Scan() allows only a Latin
 		// allow-list and flags everything else — correct for spell-check prefix

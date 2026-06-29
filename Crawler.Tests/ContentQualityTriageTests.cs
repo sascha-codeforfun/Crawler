@@ -664,5 +664,87 @@ namespace Crawler.Tests
 			var spans = ContentQualityTriage.ComputeWordCollisionSpans("wort<span>lower text");
 			Assert.Empty(spans);
 		}
+
+		// —— CONTROL_CHARS_IN_CONTENT carding (D106) ———————————
+
+		[Fact]
+		public void BuildGroups_ControlChars_OneCardPerFinding()
+		{
+			var path = LogFile(
+				"inv.html|CONTROL_CHARS_IN_CONTENT|Found ZWSP (U+200B) in <title> text|Specimen[INVISIBLE ZERO-WIDTH SPACE U+200B] title",
+				"inv.html|CONTROL_CHARS_IN_CONTENT|Found ZWSP (U+200B) in meta[@name=\"description\"] content|A meta[INVISIBLE ZERO-WIDTH SPACE U+200B] desc"
+			);
+			var cc = Groups(path)
+				.Where(g => g.DisplayType == "CONTROL_CHARS_IN_CONTENT")
+				.ToList();
+			// One card per finding — title and meta surface separately.
+			Assert.Equal(2, cc.Count);
+			// Word carries the per-finding Detail so each round-trips on its own key.
+			Assert.All(cc, g => Assert.StartsWith("CONTROL_CHARS_IN_CONTENT:", g.Word));
+			Assert.Contains(cc, g => g.Word.Contains("<title>"));
+			Assert.Contains(cc, g => g.Word.Contains("meta"));
+		}
+
+		[Fact]
+		public void ExtractControlCharMarkers_ReturnsDistinctMarkersInOrder()
+		{
+			var markers = ContentQualityTriage.ExtractControlCharMarkers(
+				"a[INVISIBLE ZERO-WIDTH SPACE U+200B]b[CR]c[INVISIBLE ZERO-WIDTH SPACE U+200B]d");
+			Assert.Equal(
+				new[] { "[INVISIBLE ZERO-WIDTH SPACE U+200B]", "[CR]" },
+				markers);
+		}
+
+		// ── SplitControlCharLocation (D111: amber the Detail location token) ──
+
+		[Theory]
+		[InlineData("Found ZWSP (U+200B) in <p> text", "Found ZWSP (U+200B) in ", "<p>", " text")]
+		[InlineData("Found ZWSP (U+200B) in <h2> text", "Found ZWSP (U+200B) in ", "<h2>", " text")]
+		[InlineData("Found ZWSP (U+200B) in <title> text", "Found ZWSP (U+200B) in ", "<title>", " text")]
+		[InlineData("Found LF (U+000A) in meta[@name=\"description\"] content", "Found LF (U+000A) in ", "meta[@name=\"description\"]", " content")]
+		public void SplitControlCharLocation_KnownShapes_IsolatesToken(
+			string detail, string before, string token, string after)
+		{
+			var (b, t, a) = ContentQualityTriage.SplitControlCharLocation(detail);
+			Assert.Equal(before, b);
+			Assert.Equal(token, t);
+			Assert.Equal(after, a);
+		}
+
+		[Theory]
+		[InlineData("")]
+		[InlineData("no recognisable shape here")]
+		[InlineData("Found ZWSP (U+200B) in <p>")] // has \" in \" but no trailing text/content
+		public void SplitControlCharLocation_UnrecognisedShape_EmptyToken(string detail)
+		{
+			var (_, token, _) = ContentQualityTriage.SplitControlCharLocation(detail);
+			Assert.Equal(string.Empty, token);
+		}
+
+		// ── Decomposition spans / markers (D115) ────────────────────────────
+
+		[Fact]
+		public void ComputeDecompositionSpans_TwoLetters_TwoSpansAtBasePositions()
+		{
+			// f u◌̈ r   k o◌̈ nnen  — base+mark spans at the 'u' (1) and 'o' (6).
+			var spans = ContentQualityTriage.ComputeDecompositionSpans("fu\u0308r ko\u0308nnen");
+			Assert.Equal(2, spans.Count);
+			Assert.Equal((1, 2), (spans[0].Start, spans[0].Length));
+			Assert.Equal((6, 2), (spans[1].Start, spans[1].Length));
+		}
+
+		[Fact]
+		public void ComputeDecompositionSpans_Composed_NoSpans()
+		{
+			// Precomposed ü is a single char, not base+mark — nothing to light.
+			Assert.Empty(ContentQualityTriage.ComputeDecompositionSpans("f\u00FCr"));
+		}
+
+		[Fact]
+		public void ExtractDecompositionMarkers_FindsCodepointMarkers()
+		{
+			var markers = ContentQualityTriage.ExtractDecompositionMarkers("f\u00FCr  |  fu[U+0308]r");
+			Assert.Equal(new[] { "[U+0308]" }, markers);
+		}
 	}
 }

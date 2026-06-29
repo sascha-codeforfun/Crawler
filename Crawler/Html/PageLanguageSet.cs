@@ -89,6 +89,37 @@ namespace Crawler.Html
 			string defaultLanguage)
 			=> Resolve(url, Language.FromHtmlFile(filename, fileDownloadDirectory, defaultLanguage), overrides);
 
+		/// <summary>
+		/// True iff a PageLanguageOverrides prefix governs this URL — i.e. <see cref="Resolve(string,
+		/// string, IReadOnlyDictionary{string, List{string}})"/> would return an override set rather
+		/// than the branch language. Mirrors that method's branch exactly: longest matching key wins,
+		/// and that key's language list must be non-empty. Callers use it to decide whether per-element
+		/// lang resolution applies (it does not when an override governs — the operator's declaration
+		/// is ground truth for the whole page).
+		/// </summary>
+		public static bool HasOverride(
+			string url,
+			IReadOnlyDictionary<string, List<string>>? overrides)
+		{
+			if (overrides is not { Count: > 0 })
+			{
+				return false;
+			}
+
+			string path = PathOf(url);
+			string? bestKey = null;
+			foreach (var key in overrides.Keys)
+			{
+				if (path.StartsWith(key, StringComparison.OrdinalIgnoreCase)
+					&& (bestKey == null || key.Length > bestKey.Length))
+				{
+					bestKey = key;
+				}
+			}
+
+			return bestKey != null && overrides[bestKey] is { Count: > 0 };
+		}
+
 		/// <summary>Strip scheme + host and query/fragment, leaving the path from the first '/'.</summary>
 		private static string PathOf(string url)
 		{

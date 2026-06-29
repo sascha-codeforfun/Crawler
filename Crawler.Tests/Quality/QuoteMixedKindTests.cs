@@ -17,7 +17,7 @@ namespace Crawler.Tests.Quality
 		private static ContentQualityConfig Config() => new()
 		{
 			ContentQualityExcerptRadius   = 120,
-			ContentQualityQuoteMaxExcerpt = 400,
+			ContentQualityMaxExcerpt = 400,
 		};
 
 		[Fact]
@@ -57,7 +57,7 @@ namespace Crawler.Tests.Quality
 			var cfg = new ContentQualityConfig
 			{
 				ContentQualityExcerptRadius   = 120,
-				ContentQualityQuoteMaxExcerpt = 400,
+				ContentQualityMaxExcerpt = 400,
 			};
 			var text = "die App \u201EMobiles Bezahlen\u0022 noch nicht";
 			var issues = Quotes.CheckPairing("f.html", text, cfg, "de").ToList();

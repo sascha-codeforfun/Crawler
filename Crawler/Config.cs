@@ -215,6 +215,15 @@ namespace Crawler
 		public string CustomDictionaryFile { get; set; } = string.Empty;
 
 		/// <summary>
+		/// Optional foreign-language dictionary filename (e.g. "user_foreign_languages.dic").
+		/// A relaxed-policy allow-list of researched, comment-justified words from any
+		/// script that the strict user/site dictionary rejects. Empty (default) = not
+		/// loaded, no behaviour change. Consult-only: words are accepted but exempt from
+		/// orphan/prune maintenance and cannot be added from triage.
+		/// </summary>
+		public string CustomForeignDictionaryFile { get; set; } = string.Empty;
+
+		/// <summary>
 		/// CMS content list — drives 04/05 logs, spell-ticket metadata, and the
 		/// optional post-crawl pass. The list is exported manually from the CMS
 		/// (currently as CSV; could be other tabular formats in the future), so
@@ -606,6 +615,10 @@ namespace Crawler
 			yield return new("CustomDictionaryFile",
 				() => c.CustomDictionaryFile, v => c.CustomDictionaryFile = v ?? string.Empty);
 
+			yield return new("CustomForeignDictionaryFile",
+				() => c.CustomForeignDictionaryFile,
+				v => c.CustomForeignDictionaryFile = v ?? string.Empty);
+
 			for (int i = 0; i < c.ExtendedCrawlJsonPathPrefixes.Count; i++)
 			{
 				int idx = i;   // capture
@@ -787,6 +800,15 @@ namespace Crawler
 					"Use one of: TrustByteSniff (default), TrustContentType, Quarantine, AnalyseBlindly.");
 			}
 
+			// CheckDecomposition — empty (= default FlagAll) or a valid enum member.
+			if (!string.IsNullOrWhiteSpace(config.ContentQuality.CheckDecomposition)
+				&& !Enum.TryParse<DecompositionMode>(config.ContentQuality.CheckDecomposition, ignoreCase: true, out _))
+			{
+				errors.Add(
+					$"ContentQuality.CheckDecomposition '{config.ContentQuality.CheckDecomposition}' is not valid. " +
+					"Use one of: FlagAll (default), FlagMixed, off.");
+			}
+
 			// TriageUrlHighlight — each rule's Value must be a slash-bounded path
 			// fragment (the slashes are match anchors) and Highlight must index a
 			// real palette slot. Caught at startup so a typo'd colour index or an
@@ -927,6 +949,19 @@ namespace Crawler
 
 			foreach (var set in sets)
 			{
+				// D — OnlyFlagUnbalanced is envelope-only: it spares well-formed bindings and
+				// fires on malformed ones, which is meaningless on anything but a two-pattern
+				// grouped pair. On any other shape it is silently inert, so reject it loudly
+				// (mirrors rule C for Reference).
+				if (set.OnlyFlagUnbalanced && (!set.GroupPatterns || set.Patterns.Count != 2))
+				{
+					throw new InvalidOperationException(
+						$"ContentUnwantedPattern '{set.Name}' sets \"OnlyFlagUnbalanced\": true but is not an "
+						+ "envelope. OnlyFlagUnbalanced only applies to a grouped opener/closer pair "
+						+ "(GroupPatterns:true with exactly 2 Patterns) — on any other shape it is silently "
+						+ "inert. Make this set an envelope or remove OnlyFlagUnbalanced.");
+				}
+
 				if (string.IsNullOrEmpty(set.Reference))
 				{
 					continue;  // The common case — no envelope linkage to check.
@@ -1927,10 +1962,60 @@ namespace Crawler
 	/// Checks are distinct from spell-checking — they catch editorial quality issues
 	/// such as ligatures from PDF copy-paste and typographic quote problems.
 	/// </summary>
+	/// <summary>
+	/// Governs the decomposed-text (non-NFC) content-quality finding. See
+	/// <see cref="ContentQualityConfig.CheckDecomposition"/> for the rationale and
+	/// default. The spell path's NFC-at-lookup normalisation (D112) is unconditional
+	/// and independent of this lever.
+	/// </summary>
+	public enum DecompositionMode
+	{
+		/// <summary>Silent — no decomposed-text findings.</summary>
+		Off,
+
+		/// <summary>Flag only pages that mix both forms of the same word — provably
+		/// breaks in-page search and dedup, true regardless of any opinion on NFD.</summary>
+		FlagMixed,
+
+		/// <summary>Flag any decomposed text, plus mixed-form pages. The default:
+		/// decomposed content is byte-fragile across consumers that may not normalise,
+		/// and the producer's own surface usually masks the harm.</summary>
+		FlagAll
+	}
+
 	public class ContentQualityConfig
 	{
 		/// <summary>Scan for ligature characters (ﬁ ﬂ ﬀ ﬃ ﬄ ﬅ ﬆ) in visible text.</summary>
 		public bool CheckLigatures { get; set; } = true;
+
+		// Detect text stored in a decomposed Unicode form (NFD) — a base letter plus
+		// a separate combining mark, e.g. "ä" as a + U+0308 rather than the precomposed
+		// U+00E4. It renders identically but is byte-fragile: correctness then depends on
+		// every downstream consumer normalising to NFC, and they do not reliably do so —
+		// site search, app search, autosuggest, AI tokenisers and partner feeds each
+		// decide independently, often locale-dependently. Real failure mode: an app user
+		// on locale XYZ searches "Äpfel", autosuggest offers "Äpfel kaufen" (proving the
+		// content exists), the tap returns zero results — because the suggestion and the
+		// query carry different normalisations. Near-impossible to reproduce downstream
+		// (works on any device whose locale happens to agree), so detecting it at the
+		// content source is the only reliable catch — hence the loudest default. One of:
+		//   "FlagAll"   (default) — flag any decomposed text AND mixed-form pages.
+		//   "FlagMixed"           — flag only pages mixing both forms of one word
+		//                           (the airtight case: provably breaks search/dedup).
+		//   "off"                 — silent. (The spell path still normalises at lookup
+		//                           regardless; that is correctness, not this lever.)
+		// Empty = default (FlagAll). Validated at startup.
+		public string CheckDecomposition { get; set; } = string.Empty;
+
+		/// <summary>
+		/// <see cref="CheckDecomposition"/> resolved to its enum. Empty/unset → FlagAll.
+		/// Unknown values are rejected by ValidateConfig at startup, so by the time this
+		/// is read the string is empty or a valid member name.
+		/// </summary>
+		public DecompositionMode ResolvedCheckDecomposition =>
+			string.IsNullOrWhiteSpace(CheckDecomposition)
+				? DecompositionMode.FlagAll
+				: Enum.Parse<DecompositionMode>(CheckDecomposition, ignoreCase: true);
 
 		/// <summary>
 		/// Flag pages where html lang="..." and meta name="language" content="..."
@@ -2195,7 +2280,7 @@ namespace Crawler
 		/// </summary>
 		public List<string> ContentQualityBlockElements { get; set; } =
 		[
-			"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th"
+			"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th", "dd", "dt"
 		];
 
 		/// <summary>
@@ -2243,10 +2328,11 @@ namespace Crawler
 		public bool ContentQualityQuoteFullSentence { get; set; } = true;
 
 		/// <summary>
-		/// Maximum character length for quote excerpts when ContentQualityQuoteFullSentence
-		/// is true. German sentences can be long — increase if excerpts are still truncated.
+		/// Maximum character length for content-quality excerpts — the quote/anchor
+		/// findings and the control-character (CONTROL_CHARS_IN_CONTENT) excerpt.
+		/// German sentences can be long — increase if excerpts are still truncated.
 		/// </summary>
-		public int ContentQualityQuoteMaxExcerpt { get; set; } = 400;
+		public int ContentQualityMaxExcerpt { get; set; } = 400;
 
 		public bool IsEnabled => CheckLigatures || CheckLanguageMismatch || CheckQuoteSystemMixing
 			|| CheckQuotePairing || CheckPotentialTranslation || CheckSplitWordAnchors
@@ -2373,6 +2459,42 @@ namespace Crawler
 		/// hits still fires alone. Empty (default) disables coalescing for this set.
 		/// </summary>
 		public string Reference { get; set; } = string.Empty;
+
+		/// <summary>
+		/// Envelope-only (GroupPatterns:true with exactly 2 Patterns). When true, this set is
+		/// a TEMPLATE-BINDING envelope and fires ONLY on a MALFORMED binding — a cleanly-
+		/// flanked identifier ([A-Za-z0-9._]+) carrying a FULL doubled fence ("{{" or "}}") on
+		/// exactly one side: "{foo}}", "foo}}", "{{foo}", "{{foo". A well-formed "{{foo}}" is
+		/// fine and stays SILENT (the JS binds it at runtime). A token with no full fence is
+		/// ignored — single-brace shapes like "{n}", "{foo", "foo}" are a different (or no)
+		/// templating style and would only bury real findings. The identifier must be flanked
+		/// by whitespace or a string edge on its outer side, so structural brace runs in
+		/// embedded JSON/CSS ("display:none}}", "…2}},", "…null}}'") — which sit against a
+		/// non-space, non-brace neighbour — are ignored. Assumes a doubled-char fence such as
+		/// {{ }}. When false (default), every occurrence of either delimiter surfaces
+		/// regardless of shape — for delimiters that must never reach the user even when
+		/// paired, e.g. %( )%.
+		/// </summary>
+		public bool OnlyFlagUnbalanced { get; set; } = false;
+
+		/// <summary>
+		/// Whether this set scans inside &lt;script&gt; … &lt;/script&gt; regions. Default true.
+		/// UnwantedPatterns is a general content-quality detector, so scanning script is on by
+		/// default (a banned API call or leaked token in inline JS is a legitimate target). Set
+		/// false to skip script regions when a pattern is structurally noisy there — e.g. a
+		/// Mustache {{ }} envelope, whose braces never carry a real binding inside JS.
+		/// </summary>
+		public bool CheckScript { get; set; } = true;
+
+		/// <summary>
+		/// Whether this set scans inside &lt;style&gt; … &lt;/style&gt; regions. Default true.
+		/// Set false to skip CSS when a pattern collides with stylesheet syntax — e.g. a
+		/// Mustache "}}" envelope false-firing on a CSS block close like "30px 1fr}}", where the
+		/// space-flanked value reads as a dangling-close binding. The matching content lives in
+		/// the body, never in CSS, so skipping &lt;style&gt; removes the noise without weakening
+		/// real detection.
+		/// </summary>
+		public bool CheckStyle { get; set; } = true;
 
 		public bool IsConfigured => !string.IsNullOrEmpty(Name) && Patterns.Count > 0;
 	}

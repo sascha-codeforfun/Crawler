@@ -15,7 +15,7 @@ namespace Crawler.Quality
 		/// universally-known control chars; the prefix [INVISIBLE &lt;kind&gt;
 		/// U+XXXX] for everything else.
 		/// </summary>
-		internal static string Truncate(string s)
+		internal static string Truncate(string s, int maxLength = 250)
 		{
 			if (string.IsNullOrEmpty(s))
 			{
@@ -37,6 +37,13 @@ namespace Crawler.Quality
 				if (ch == '\u200C') { sb.Append("[INVISIBLE ZERO-WIDTH NON-JOINER U+200C]"); continue; }
 				if (ch == '\u200D') { sb.Append("[INVISIBLE ZERO-WIDTH JOINER U+200D]"); continue; }
 				if (ch == '\uFEFF') { sb.Append("[INVISIBLE BOM U+FEFF]"); continue; }
+				if (ch == '\u00AD') { sb.Append("[INVISIBLE SOFT HYPHEN U+00AD]"); continue; }
+				if (ch == '\u007F') { sb.Append("[INVISIBLE DEL U+007F]"); continue; }
+				if (ch == '\u2060') { sb.Append("[INVISIBLE WORD JOINER U+2060]"); continue; }
+				if (ch == '\u061C' || ch == '\u200E' || ch == '\u200F')
+				{ sb.Append($"[INVISIBLE BIDI MARK U+{(int)ch:X4}]"); continue; }
+				if (ch >= '\u2061' && ch <= '\u2064')
+				{ sb.Append($"[INVISIBLE MATH U+{(int)ch:X4}]"); continue; }
 				if (ch >= '\u202A' && ch <= '\u202E')
 				{ sb.Append($"[INVISIBLE BIDI CONTROL U+{(int)ch:X4}]"); continue; }
 				if (ch >= '\u2066' && ch <= '\u2069')
@@ -53,11 +60,12 @@ namespace Crawler.Quality
 			}
 
 			var visible = sb.ToString();
-			// Bumped from 200 → 250 to accommodate longer markers without
-			// losing surrounding context. A 250-char excerpt with two
-			// [INVISIBLE LINE SEPARATOR U+2028] markers still leaves ~180
-			// chars of actual content visible to the operator.
-			return visible.Length > 250 ? visible[..250] + "…" : visible;
+			// Caps the rendered excerpt at maxLength (default 250; the CQ
+			// control-char callers pass ContentQualityMaxExcerpt so a full
+			// paragraph survives intact). Markers are already rendered here, so
+			// keep maxLength comfortably above one element's text to avoid
+			// slicing a marker at the boundary.
+			return visible.Length > maxLength ? visible[..maxLength] + "…" : visible;
 		}
 	}
 }

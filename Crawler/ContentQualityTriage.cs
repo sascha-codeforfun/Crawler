@@ -100,7 +100,7 @@ namespace Crawler
 			// triage. The map is the same BuildGroups accumulation triage walks; the
 			// liveKeys gate already guarantees a reviewed record has a group present.
 			var collisionContextsByKey = WordCollisionContextsByKey(groups);
-			ReviewTriagedQualityItems(issueTrackingPath, liveKeys, urlHighlightRules, collisionContextsByKey);
+			ReviewTriagedQualityItems(issueTrackingPath, liveKeys, urlHighlightRules, collisionContextsByKey, config);
 
 			// [KEEP] Suppress groups already decided in IssueTracking.
 			// wontfix/config/fixed = operator decided, do not re-present.
@@ -247,6 +247,64 @@ namespace Crawler
 						ConsoleUi.WriteFieldInline("Ligature");
 						ConsoleUi.WriteWithLigatureSpans(body, ComputeLigatureSpans(body));
 						ConsoleUi.WriteBlank();
+					}
+					else if (group.DisplayType == "DECOMPOSED_TEXT_IN_CONTENT"
+						&& line.StartsWith("Decomp : ", StringComparison.Ordinal))
+					{
+						// Light up every decomposed grapheme (base + combining mark) in the
+						// excerpt — invisible on screen (renders as a normal 'ü'/'ö'), so the
+						// highlight is the only cue to which characters are decomposed. Pure
+						// helper locates the base+mark spans; the ligature painter (red-on-white)
+						// paints them — the same offender-glyph-hiding-in-prose treatment.
+						var body = line["Decomp : ".Length..];
+						ConsoleUi.WriteFieldInline("Decomp");
+						ConsoleUi.WriteWithLigatureSpans(body, ComputeDecompositionSpans(body));
+						ConsoleUi.WriteBlank();
+					}
+					else if (group.DisplayType == "MIXED_NORMALIZATION_IN_CONTENT"
+						&& line.StartsWith("Mixed : ", StringComparison.Ordinal))
+					{
+						// The Context exposes both encodings of the word via [U+XXXX] markers
+						// (AnnotateForm). Tint those markers — same primitive the control-char
+						// markers use — so the byte difference between the forms is visible.
+						var body = line["Mixed : ".Length..];
+						ConsoleUi.WriteFieldInline("Mixed");
+						ConsoleUi.WriteWithPatternHighlight(body, ExtractDecompositionMarkers(body));
+						ConsoleUi.WriteBlank();
+					}
+					else if (group.DisplayType == "CONTROL_CHARS_IN_CONTENT"
+						&& line.StartsWith("Context : ", StringComparison.Ordinal))
+					{
+						// Highlight the operator-readable invisible-char markers
+						// ([INVISIBLE … U+XXXX], [CR]/[LF]/[TAB]) that LogExcerpt wrote into
+						// the excerpt, so the eye lands on the offending codepoint. Reuses
+						// the pattern painter — the markers ARE the patterns. Shared shape
+						// with review (muted variant).
+						var body = line["Context : ".Length..];
+						ConsoleUi.WriteFieldInline("Context");
+						ConsoleUi.WriteWithPatternHighlight(body, ExtractControlCharMarkers(body));
+						ConsoleUi.WriteBlank();
+					}
+					else if (group.DisplayType == "CONTROL_CHARS_IN_CONTENT"
+						&& line.StartsWith("Detail  : ", StringComparison.Ordinal))
+					{
+						// Tint the location token (<p>, <h2>, <title>, meta[@name="…"])
+						// amber so the operator orients on WHERE the codepoint sits at a
+						// glance. Reuses the spelling muted-highlight primitive; the pure
+						// splitter finds the token between " in " and the trailing
+						// " text"/" content". Unrecognised shape → plain field, no tint.
+						var body = line["Detail  : ".Length..];
+						var (before, token, after) = SplitControlCharLocation(body);
+						if (token.Length == 0)
+						{
+							ConsoleUi.WriteField("Detail", body);
+						}
+						else
+						{
+							ConsoleUi.WriteFieldInline("Detail");
+							ConsoleUi.WriteLineWithMutedHighlight(before, token, after);
+							ConsoleUi.WriteBlank();
+						}
 					}
 					else
 					{
@@ -555,6 +613,45 @@ namespace Crawler
 		}
 
 		/// <summary>
+		/// D105/D106: recomputes the quote offender offsets for a persisted review
+		/// record. The glyph offsets live only on the in-memory TriageGroup, which the
+		/// review pass never sees; this reproduces them exactly as live triage does
+		/// (LocateFlags over the stored excerpt under the record's declared language),
+		/// filtered to the record's own single issue type. A single declared language
+		/// anchors the system check (D049); empty or multi-language — null = structural
+		/// checks only. Non-quote records and locate failures yield an empty list (the
+		/// caller then omits the Offenders line and renders context-only colour). Pure
+		/// and side-effect-free so the review wiring can be pinned without Console.
+		/// </summary>
+		internal static IReadOnlyList<int> ComputeReviewQuoteTriggers(
+			IssueTracking.IssueRecord record, ContentQualityConfig config)
+		{
+			if (record.SourceLabel != "QUOTE ISSUES" || string.IsNullOrEmpty(record.Excerpt))
+			{
+				return [];
+			}
+
+			try
+			{
+				// Single declared language anchors the system check (D049); empty or
+				// multi-language — null = structural checks only. record.Language is the
+				// ", "-joined set persisted at promotion.
+				var langs = (record.Language ?? string.Empty)
+					.Split(", ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+				string? lang = langs.Length == 1 ? langs[0] : null;
+
+				return Quotes.LocateFlags(record.Excerpt, config, lang)
+					.Where(f => f.Type == record.Word)
+					.Select(f => f.Pos)
+					.ToList();
+			}
+			catch
+			{
+				return [];
+			}
+		}
+
+		/// <summary>
 		/// Renders the offending glyph(s) at <paramref name="triggerPositions"/> in
 		/// <paramref name="excerpt"/> as a deduplicated, counted hex list for the
 		/// card's "Offenders" line — e.g. "U+201D ”" or "U+0022 \" ×2". Each entry
@@ -702,6 +799,36 @@ namespace Crawler
 					[
 						$"Pattern : {entry.Detail}",
 						$"Example : {entry.Context}",
+					]));
+			}
+
+			// —— CONTROL_CHARS_IN_CONTENT — one card per affected element ——————
+			// Editor-class invisibles (zero-width / bidi / control / BOM) in <title>
+			// and <meta content>. Detected + logged to the editor log but never carded
+			// until now. INVISIBLE_CHAR_IN_BODY (architect-class) stays out of triage
+			// by routing; this is its editor-fixable sibling. One card per finding so
+			// the title and each meta surface separately. Word carries the Detail so
+			// each finding round-trips against its own tracking key.
+			var controlChars = lines.Where(x => x.IssueType == "CONTROL_CHARS_IN_CONTENT").ToList();
+			foreach (var entry in controlChars)
+			{
+				var url = ResolveUrl(entry.Filename);
+				if (string.IsNullOrEmpty(url))
+				{
+					url = entry.Filename;
+				}
+
+				groups.Add(new TriageGroup(
+					DisplayType: "CONTROL_CHARS_IN_CONTENT",
+					Url: url,
+					Word: $"CONTROL_CHARS_IN_CONTENT:{entry.Detail}",
+					Comment: $"See {qualityLogFilename} — {entry.Detail}",
+					Excerpt: entry.Context,
+					IsTranslation: false,
+					DisplayLines:
+					[
+						$"Detail  : {entry.Detail}",
+						$"Context : {entry.Context}",
 					]));
 			}
 
@@ -958,6 +1085,50 @@ namespace Crawler
 					DisplayLines: display));
 			}
 
+			// ── DECOMPOSED_TEXT_IN_CONTENT — group by page URL ────────────────
+			var decompByPage = lines
+				.Where(x => x.IssueType == "DECOMPOSED_TEXT_IN_CONTENT")
+				.GroupBy(x => ResolveUrl(x.Filename), StringComparer.OrdinalIgnoreCase)
+				.OrderBy(g => g.Key);
+
+			foreach (var pageGroup in decompByPage)
+			{
+				var url = pageGroup.Key;
+				var entries = pageGroup.ToList();
+				var display = entries.Select(e => $"Decomp : {e.Detail} — {e.Context}").ToList();
+
+				groups.Add(new TriageGroup(
+					DisplayType: "DECOMPOSED_TEXT_IN_CONTENT",
+					Url: url,
+					Word: "DECOMPOSED_TEXT_IN_CONTENT",
+					Comment: string.Empty,
+					Excerpt: entries[0].Context,
+					IsTranslation: false,
+					DisplayLines: display));
+			}
+
+			// ── MIXED_NORMALIZATION_IN_CONTENT — group by page URL ─────────────
+			var mixedNormByPage = lines
+				.Where(x => x.IssueType == "MIXED_NORMALIZATION_IN_CONTENT")
+				.GroupBy(x => ResolveUrl(x.Filename), StringComparer.OrdinalIgnoreCase)
+				.OrderBy(g => g.Key);
+
+			foreach (var pageGroup in mixedNormByPage)
+			{
+				var url = pageGroup.Key;
+				var entries = pageGroup.ToList();
+				var display = entries.Select(e => $"Mixed : {e.Detail} — {e.Context}").ToList();
+
+				groups.Add(new TriageGroup(
+					DisplayType: "MIXED_NORMALIZATION_IN_CONTENT",
+					Url: url,
+					Word: "MIXED_NORMALIZATION_IN_CONTENT",
+					Comment: string.Empty,
+					Excerpt: entries[0].Context,
+					IsTranslation: false,
+					DisplayLines: display));
+			}
+
 			// ── WORD_COLLISION — group by page URL ────────────────────────────
 			var collisionByPage = lines
 				.Where(x => x.IssueType == "WORD_COLLISION")
@@ -1009,7 +1180,8 @@ namespace Crawler
 			string issueTrackingPath,
 			IReadOnlySet<string> liveKeys,
 			IReadOnlyList<UrlHighlightRule> urlHighlightRules,
-			IReadOnlyDictionary<string, List<string>> collisionContextsByKey)
+			IReadOnlyDictionary<string, List<string>> collisionContextsByKey,
+			ContentQualityConfig config)
 		{
 			if (!File.Exists(issueTrackingPath))
 			{
@@ -1095,6 +1267,24 @@ namespace Crawler
 				if (!string.IsNullOrEmpty(record.Comment))
 				{
 					ConsoleUi.WriteField("Decision", record.Comment);
+				}
+
+				// D105/D106: quote offender offsets are recomputed from the stored
+				// excerpt + declared language (the in-memory TriageGroup that holds them
+				// is not visible to the review pass). Extracted into the pure
+				// ComputeReviewQuoteTriggers so it can be pinned without Console; the
+				// QUOTE branch of the Context dispatch below consumes the same offsets so
+				// the Offenders hex and the amber mark cannot disagree.
+				var quoteTriggers = ComputeReviewQuoteTriggers(record, config);
+				if (quoteTriggers.Count > 0)
+				{
+					// Offenders line sits directly above Context, mirroring the live
+					// card (Note → Offenders → Excerpt); review has no Note line.
+					var offenders = FormatQuoteOffenders(record.Excerpt, quoteTriggers);
+					if (offenders.Length > 0)
+					{
+						ConsoleUi.WriteField("Offenders", offenders);
+					}
 				}
 
 				// Context (Excerpt) highlighted in the review (amber) scheme,
@@ -1186,14 +1376,14 @@ namespace Crawler
 					}
 					else if (displayType == "QUOTE ISSUES")
 					{
-						// Review shows the same blue-context palette as live triage via
-						// the shared primitive. Trigger pinpointing in review needs the
-						// page language (and thus the record's source file) threaded into
-						// this pass — deferred; until then every quote renders as context,
-						// which is palette-consistent and never mis-marks.
+						// D105: the offending glyph(s) render in the review (amber) emphasis
+						// and the remaining quotes in context blue, via the muted primitive.
+						// quoteTriggers (recomputed above from the stored excerpt + declared
+						// language) pinpoints the same glyph live triage marks; an empty set
+						// (no single language, or a locate failure) degrades to context-only.
 						ConsoleUi.WriteInline(ctxPrefix);
 						ConsoleUi.WriteWithQuoteSpansMuted(
-							record.Excerpt, ComputeQuoteSpans(record.Excerpt, []));
+							record.Excerpt, ComputeQuoteSpans(record.Excerpt, quoteTriggers));
 						ConsoleUi.WriteBlank();
 					}
 					else if (displayType == "UNWANTED_PATTERN")
@@ -1201,6 +1391,14 @@ namespace Crawler
 						ConsoleUi.WriteInline(ctxPrefix);
 						ConsoleUi.WriteWithPatternHighlightMuted(
 							record.Excerpt, ExtractHighlightPatterns(record.Word));
+						ConsoleUi.WriteBlank();
+					}
+					else if (displayType == "CONTROL_CHARS_IN_CONTENT")
+					{
+						// Same invisible-char marker highlight as live, muted for review.
+						ConsoleUi.WriteInline(ctxPrefix);
+						ConsoleUi.WriteWithPatternHighlightMuted(
+							record.Excerpt, ExtractControlCharMarkers(record.Excerpt));
 						ConsoleUi.WriteBlank();
 					}
 					else
@@ -1295,6 +1493,104 @@ namespace Crawler
 					.Split(", ", StringSplitOptions.RemoveEmptyEntries);
 			}
 			return [patternKey];
+		}
+
+		/// <summary>
+		/// Distinct operator-readable invisible-char markers present in a control-
+		/// chars excerpt, in first-seen order. LogExcerpt writes invisibles out as
+		/// bracketed tokens ([CR]/[LF]/[TAB] and [INVISIBLE &lt;kind&gt; U+XXXX]); the
+		/// triage cards highlight exactly those tokens by passing them to the pattern
+		/// painter (red live / amber review). Internal so it can be unit-tested.
+		/// </summary>
+		internal static string[] ExtractControlCharMarkers(string text)
+		{
+			if (string.IsNullOrEmpty(text))
+			{
+				return [];
+			}
+
+			var seen = new List<string>();
+			var set = new HashSet<string>(StringComparer.Ordinal);
+			foreach (System.Text.RegularExpressions.Match m in ControlCharMarkerRegex.Matches(text))
+			{
+				if (set.Add(m.Value))
+				{
+					seen.Add(m.Value);
+				}
+			}
+			return seen.ToArray();
+		}
+
+		private static readonly System.Text.RegularExpressions.Regex ControlCharMarkerRegex =
+			new(@"\[(?:CR|LF|TAB|INVISIBLE [A-Z0-9 \-]+ U\+[0-9A-Fa-f]{4,6})\]",
+				System.Text.RegularExpressions.RegexOptions.Compiled);
+
+		// The [U+XXXX] markers AnnotateForm writes into a MIXED_NORMALIZATION excerpt,
+		// so the painter can tint the combining codepoints that distinguish the two
+		// encodings of the same word.
+		internal static string[] ExtractDecompositionMarkers(string text)
+		{
+			if (string.IsNullOrEmpty(text))
+			{
+				return [];
+			}
+
+			var seen = new List<string>();
+			var set = new HashSet<string>(StringComparer.Ordinal);
+			foreach (System.Text.RegularExpressions.Match m in DecompositionMarkerRegex.Matches(text))
+			{
+				if (set.Add(m.Value))
+				{
+					seen.Add(m.Value);
+				}
+			}
+			return seen.ToArray();
+		}
+
+		private static readonly System.Text.RegularExpressions.Regex DecompositionMarkerRegex =
+			new(@"\[U\+[0-9A-Fa-f]{4,6}\]",
+				System.Text.RegularExpressions.RegexOptions.Compiled);
+
+		/// <summary>
+		/// Splits a CONTROL_CHARS_IN_CONTENT Detail into (text before the location
+		/// token, the token, trailing text) so the token — the element or meta
+		/// selector naming WHERE the codepoint sits — can be tinted. The detector
+		/// writes \"Found {name} in <{tag}> text\", \"… in <title> text\", and
+		/// \"… in meta[@name=\\\"{n}\\\"] content\". The token runs from the first
+		/// " in " to the trailing " text"/" content". Empty Token = unrecognised
+		/// shape (caller renders the line plain). Pure (no Console), unit-tested.
+		/// </summary>
+		internal static (string Before, string Token, string After) SplitControlCharLocation(string detail)
+		{
+			if (string.IsNullOrEmpty(detail))
+			{
+				return (detail ?? string.Empty, string.Empty, string.Empty);
+			}
+
+			const string inMarker = " in ";
+			var inIdx = detail.IndexOf(inMarker, StringComparison.Ordinal);
+			if (inIdx < 0)
+			{
+				return (detail, string.Empty, string.Empty);
+			}
+
+			var tokenStart = inIdx + inMarker.Length;
+			var suffixStart = -1;
+			foreach (var suffix in new[] { " content", " text" })
+			{
+				if (detail.EndsWith(suffix, StringComparison.Ordinal))
+				{
+					suffixStart = detail.Length - suffix.Length;
+					break;
+				}
+			}
+
+			if (suffixStart <= tokenStart)
+			{
+				return (detail, string.Empty, string.Empty);
+			}
+
+			return (detail[..tokenStart], detail[tokenStart..suffixStart], detail[suffixStart..]);
 		}
 
 		/// <summary>
@@ -1744,6 +2040,46 @@ namespace Crawler
 			}
 
 			return spans;
+		}
+
+		// Spans for every decomposed grapheme (base + composing combining mark) in an
+		// excerpt — the DECOMPOSED_TEXT highlight. Invisible on screen (renders as a
+		// normal 'ü'/'ö'), so the span is the only cue. Same composability test as the
+		// detector; one length-2 span per base+mark, skipping stacked marks so spans
+		// never overlap (the painter requires non-overlapping ascending spans). Composed
+		// graphemes naming the defect in the Detail are single chars, so they are not
+		// matched — only the actual NFD sequences in the excerpt light up.
+		internal static List<ConsoleUi.QuoteHighlightSpan> ComputeDecompositionSpans(string text)
+		{
+			var spans = new List<ConsoleUi.QuoteHighlightSpan>();
+			if (string.IsNullOrEmpty(text))
+			{
+				return spans;
+			}
+
+			for (int i = 1; i < text.Length; i++)
+			{
+				if (!IsCombiningMarkChar(text[i]) || IsCombiningMarkChar(text[i - 1]))
+				{
+					continue;
+				}
+
+				var pair = text.Substring(i - 1, 2);
+				if (pair.Normalize(System.Text.NormalizationForm.FormC).Length < pair.Length)
+				{
+					spans.Add(new ConsoleUi.QuoteHighlightSpan(i - 1, 2, IsTrigger: true));
+				}
+			}
+
+			return spans;
+		}
+
+		private static bool IsCombiningMarkChar(char c)
+		{
+			var cat = char.GetUnicodeCategory(c);
+			return cat == System.Globalization.UnicodeCategory.NonSpacingMark
+				|| cat == System.Globalization.UnicodeCategory.SpacingCombiningMark
+				|| cat == System.Globalization.UnicodeCategory.EnclosingMark;
 		}
 
 		/// <summary>

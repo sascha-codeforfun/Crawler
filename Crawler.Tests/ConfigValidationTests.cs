@@ -249,6 +249,27 @@ namespace Crawler.Tests
 		}
 
 		[Fact]
+		public void LoadFromJson_AcceptsOnlyFlagUnbalancedOnEnvelope()
+		{
+			var body = "[ { \"Category\": \"Security\", \"Name\": \"Mustache\", \"GroupPatterns\": true, "
+				+ "\"OnlyFlagUnbalanced\": true, \"CaseSensitive\": true, \"Patterns\": [ \"{{\", \"}}\" ] } ]";
+			var cfg = Config.LoadFromJson(WriteJson(WithUnwantedPatterns(body)));
+			Assert.True(cfg.ContentUnwantedPatterns[0].OnlyFlagUnbalanced);
+		}
+
+		[Fact]
+		public void LoadFromJson_ThrowsWhenOnlyFlagUnbalancedOnNonEnvelope()
+		{
+			// OnlyFlagUnbalanced on a single-pattern (non-envelope) set is inert → rejected (rule D).
+			var body = "[ { \"Category\": \"Security\", \"Name\": \"Bad\", \"GroupPatterns\": false, "
+				+ "\"OnlyFlagUnbalanced\": true, \"Patterns\": [ \"{{\" ] } ]";
+			var ex = Assert.Throws<InvalidOperationException>(
+				() => Config.LoadFromJson(WriteJson(WithUnwantedPatterns(body))));
+			Assert.Contains("OnlyFlagUnbalanced", ex.Message);
+			Assert.Contains("not an envelope", ex.Message);
+		}
+
+		[Fact]
 		public void LoadFromJson_ThrowsOnDuplicateUnwantedPatternName()
 		{
 			var body = "[ { \"Category\": \"Test\", \"Name\": \"Dup\", \"GroupPatterns\": false, \"Patterns\": [ \"x\" ] }, "

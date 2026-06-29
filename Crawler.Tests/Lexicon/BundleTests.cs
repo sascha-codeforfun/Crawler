@@ -46,6 +46,34 @@ namespace Crawler.Tests.Lexicon
 			Assert.True(new Bundle().Check("   "));
 		}
 
+		// ── NFC normalisation at lookup (D112) ───────────────────────
+
+		[Fact]
+		public void Check_DecomposedQuery_MatchesComposedEntry()
+		{
+			// "für" stored composed (U+00FC); queried decomposed (u + U+0308).
+			// Renders identically; without NFC normalisation the byte-mismatch would
+			// reject a valid word — the für/gebündelt regression.
+			var bundle = BundleWithSite("f\u00FCr");
+			Assert.True(bundle.Check("fu\u0308r"));
+		}
+
+		[Fact]
+		public void Check_ComposedQuery_StillMatchesComposedEntry()
+		{
+			var bundle = BundleWithSite("f\u00FCr");
+			Assert.True(bundle.Check("f\u00FCr"));
+		}
+
+		[Fact]
+		public void Check_DecomposedWordNotInDictionary_ReturnsFalse()
+		{
+			// Normalisation must not over-accept: a decomposed token absent from every
+			// tier is still rejected (only "für" is known here).
+			var bundle = BundleWithSite("f\u00FCr");
+			Assert.False(bundle.Check("ba\u0308r")); // "bär" decomposed, not in dict
+		}
+
 		[Fact]
 		public void Check_WordInSharedUser_ReturnsTrueAndRecordsUsage()
 		{

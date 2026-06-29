@@ -81,5 +81,51 @@ namespace Crawler.Tests.Html
 		{
 			Assert.Equal(expected, Language.IsISO6391(code));
 		}
+
+		// ── NearestElementLanguage ────────────────────────────
+		// Walks ancestors from a node; nearest valid lang wins (child overrides parent),
+		// "de-DE" → "de", invalid codes skipped, page/fallback as floor.
+
+		[Fact]
+		public void NearestElementLanguage_NestedIsland_ChildWins()
+		{
+			var doc = LoadHtml("<html lang=\"en\"><body><div lang=\"ar\"><p id=\"t\">x</p></div></body></html>");
+			Assert.Equal("ar", Language.NearestElementLanguage(doc.GetElementbyId("t"), "xx"));
+		}
+
+		[Fact]
+		public void NearestElementLanguage_NoNearerLang_WalksToHtmlLang()
+		{
+			var doc = LoadHtml("<html lang=\"en\"><body><p id=\"t\">x</p></body></html>");
+			Assert.Equal("en", Language.NearestElementLanguage(doc.GetElementbyId("t"), "xx"));
+		}
+
+		[Fact]
+		public void NearestElementLanguage_NoLangAnywhere_ReturnsFallback()
+		{
+			var doc = LoadHtml("<html><body><p id=\"t\">x</p></body></html>");
+			Assert.Equal("de", Language.NearestElementLanguage(doc.GetElementbyId("t"), "de"));
+		}
+
+		[Fact]
+		public void NearestElementLanguage_RegionalSubtag_NormalisesToBase()
+		{
+			var doc = LoadHtml("<html><body><div lang=\"de-DE\"><p id=\"t\">x</p></div></body></html>");
+			Assert.Equal("de", Language.NearestElementLanguage(doc.GetElementbyId("t"), "xx"));
+		}
+
+		[Fact]
+		public void NearestElementLanguage_InvalidLang_SkippedKeepsWalking()
+		{
+			// "klingon" isn't ISO 639-1, so the walk continues past it to <html lang="en">.
+			var doc = LoadHtml("<html lang=\"en\"><body><div lang=\"klingon\"><p id=\"t\">x</p></div></body></html>");
+			Assert.Equal("en", Language.NearestElementLanguage(doc.GetElementbyId("t"), "xx"));
+		}
+
+		[Fact]
+		public void NearestElementLanguage_NullNode_ReturnsFallback()
+		{
+			Assert.Equal("fr", Language.NearestElementLanguage(null, "fr"));
+		}
 	}
 }

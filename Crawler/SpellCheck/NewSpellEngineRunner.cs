@@ -180,6 +180,26 @@ namespace Crawler.SpellCheck
 
 				var (matcher, isCheckPage) = resolver.Resolve(url);
 
+				// Per-element lang: when NO override governs this URL, each run is checked against the
+				// dictionary for the language declared closest to it (nearest <… lang> ancestor, the
+				// page language as floor) — so a <div lang="ar"> island is checked as Arabic, not as
+				// the page's English. An override stays ground truth for the whole page (today's
+				// behaviour). An island whose declared language has no loaded bundle falls back to the
+				// page set, reproducing today's behaviour for those words (they surface as normal
+				// findings, signalling the operator to load that dictionary). No run is ever checked
+				// against a broader set than today; dictionary-backed islands get a narrower, correct one.
+				bool overrideActive = Crawler.Html.PageLanguageSet.HasOverride(url, engineConfig.PageLanguageOverrides);
+				IReadOnlyList<string> RunLanguagesFor(TextRun run)
+				{
+					if (overrideActive)
+					{
+						return languages;
+					}
+
+					string island = Crawler.Html.Language.NearestElementLanguage(run.Node, branchLanguage);
+					return dictionaryBundles.ContainsKey(island) ? new[] { island } : languages;
+				}
+
 				// Primary bundle follows the language argument inside the checker, so any of the set's
 				// languages is checkable from this one instance (see ToolsSpellChecker.Check). A fresh
 				// checker per page keeps all per-page state thread-local.
@@ -196,7 +216,7 @@ namespace Crawler.SpellCheck
 				// pipeline on the finding.
 				var pairs = DomTraverser
 					.Traverse(doc, matcher, isCheckPage, skipAttributeNames, engineConfig.SpellCheckJavaScript.Enabled, metaContentNames, globalIgnore, htmlTagsToIgnore)
-					.SelectMany(run => RunChecker.Check(run, languages, checker.Check, knownDefects, engineConfig.HeuristicNonProseDataAttributeSuppression, wordCollisions?.WordsForFile(file.Filename), scriptTokensToFilter, scriptFallbackLanguage, anchorSplitTails: anchorSplit?.ForFile(file.Filename), unwantedPatternWords: unwantedPattern?.WordsForFile(file.Filename), adjacentAnchorJoins: adjacentAnchor?.ForFile(file.Filename))
+					.SelectMany(run => RunChecker.Check(run, RunLanguagesFor(run), checker.Check, knownDefects, engineConfig.HeuristicNonProseDataAttributeSuppression, wordCollisions?.WordsForFile(file.Filename), scriptTokensToFilter, scriptFallbackLanguage, anchorSplitTails: anchorSplit?.ForFile(file.Filename), unwantedPatternWords: unwantedPattern?.WordsForFile(file.Filename), adjacentAnchorJoins: adjacentAnchor?.ForFile(file.Filename))
 						.Select(finding => (run, finding)))
 					.ToList();
 

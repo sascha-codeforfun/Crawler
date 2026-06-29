@@ -427,15 +427,34 @@ namespace Crawler
 			await Task.WhenAll(assetTasks);
 		}
 
-		// [KEEP] Security boundary — reporting for a refused (out-of-root) write.
-		// The PathContainmentCheck primitive stays pure; the side effects live here
-		// at the call layer. Containment is enforced unconditionally at the write
-		// itself, so the offending bytes are never written regardless of what this
-		// does — every escape attempt is refused independently, no matter how many
-		// times a hostile origin tries. This therefore does not halt the crawl:
-		// each refusal is logged to file and collected, the crawl continues at full
-		// parallelism, and all refusals are presented in one end-of-crawl summary
-		// for inspection (or, in a silent run, left in the log).
+		// [KEEP] Security boundary — reporting a refused (out-of-root) write, plus a
+		// DELIBERATE choice about how to react to one. The hard guarantee is at the
+		// write itself: PathContainmentCheck (pure, unchanged) blocks every
+		// out-of-root byte, and each escape is refused independently however many
+		// times it is retried. That guarantee does not depend on anything here —
+		// this method only records and reports; the side effects live at the call
+		// layer by design.
+		//
+		// So an escape does NOT abort the crawl and does NOT prompt: it is logged to
+		// file and collected, the crawl continues at full parallelism, and all
+		// refusals are shown in one end-of-crawl summary (interactive) or left in
+		// the log (silent). Why continue, rather than treat an escape as a
+		// compromised origin and bail — note this is a deliberate reversal of the
+		// earlier abort/prompt behaviour, not an oversight:
+		//   1. This is an AUDITING tool. Its job is to characterise the site —
+		//      containment-escape attempts included — and report them. The summary
+		//      IS the deliverable; aborting hands back a truncated audit and forces
+		//      a re-run.
+		//   2. The write is already neutralised per-attempt and every fetch is
+		//      host-gated (CrawlGate), so a continuing crawl gives a hostile origin
+		//      nothing it did not already have. Continuing costs nothing security-wise.
+		//   3. In practice the escapes that drove this were benign miscategorisation
+		//      (query-bearing asset names, fixed at source in the naming layer), not
+		//      hostility — so a crawl-wide abort would punish a naming artifact by
+		//      discarding the whole run.
+		// A silent-mode circuit-breaker (abort after N escapes) was considered and
+		// declined: it reinstates audit-truncation for a threat already blocked
+		// per-write. Revisit only if unattended runs must self-limit resource spend.
 		internal static void ReportContainmentRefusal(
 			PathContainmentCheck.Verdict verdict, string sourceUrl, string captureRoot, string log)
 		{

@@ -9,7 +9,7 @@ namespace Crawler.Tests.Quality
 		{
 			ContentQualityExcerptRadius    = 120,
 			ContentQualityQuoteFullSentence = false,  // keep tests deterministic
-			ContentQualityQuoteMaxExcerpt  = 400,
+			ContentQualityMaxExcerpt  = 400,
 		};
 
 		// ── Check ─────────────────────────────────────────────

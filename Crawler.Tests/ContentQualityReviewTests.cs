@@ -121,5 +121,71 @@ namespace Crawler.Tests
 		{
 			Assert.Empty(ContentQualityTriage.ExtractHighlightPatterns(string.Empty));
 		}
+
+		// —— ComputeReviewQuoteTriggers (D105/D106) ——————————————
+		// Review recomputes the quote offender offsets the in-memory TriageGroup
+		// carries but the review pass never sees. Pinned so the recompute can never
+		// silently drift from live triage. A German „…“ pair (closer U+201C) next to
+		// an English “…” pair mixes two double-quote systems on one block →
+		// QUOTE_SYSTEM_MIX, which LocateFlags evaluates unconditionally (no config
+		// flag, no declared language needed) — a stable trigger to pin against.
+		private const string MixExcerpt =
+			"Ein \u201Edeutsches\u201C Paar und ein \u201Cenglisches\u201D Paar.";
+
+		private static IssueTracking.IssueRecord QuoteRec(
+			string word, string excerpt, string language = "", string sourceLabel = "QUOTE ISSUES")
+			=> new()
+			{
+				Source = "triage",
+				Type = "QUALITY",
+				Url = "https://x/de/home/page.html",
+				Status = "pending",
+				Word = word,
+				SourceLabel = sourceLabel,
+				Excerpt = excerpt,
+				Language = language,
+			};
+
+		[Fact]
+		public void ComputeReviewQuoteTriggers_SystemMix_MarksAQuoteGlyph()
+		{
+			var pos = ContentQualityTriage.ComputeReviewQuoteTriggers(
+				QuoteRec("QUOTE_SYSTEM_MIX", MixExcerpt), new ContentQualityConfig());
+			Assert.NotEmpty(pos);
+			// every marked offset is in range and lands on a typographic quote glyph
+			Assert.All(pos, i =>
+			{
+				Assert.InRange(i, 0, MixExcerpt.Length - 1);
+				Assert.Contains(MixExcerpt[i], "\u201E\u201C\u201D\u00AB\u00BB\u2018\u2019");
+			});
+		}
+
+		[Fact]
+		public void ComputeReviewQuoteTriggers_TypeFilter_ExcludesOtherTypes()
+		{
+			// The excerpt is all-typographic, so it raises QUOTE_SYSTEM_MIX but never
+			// QUOTE_MIXED_KIND (straight/typographic mix). Asking for the type the
+			// excerpt does not raise must yield no offsets (per-record-type filter).
+			var pos = ContentQualityTriage.ComputeReviewQuoteTriggers(
+				QuoteRec("QUOTE_MIXED_KIND", MixExcerpt), new ContentQualityConfig());
+			Assert.Empty(pos);
+		}
+
+		[Fact]
+		public void ComputeReviewQuoteTriggers_NonQuoteRecord_ReturnsEmpty()
+		{
+			var pos = ContentQualityTriage.ComputeReviewQuoteTriggers(
+				QuoteRec("QUOTE_SYSTEM_MIX", MixExcerpt, sourceLabel: "LIGATURE"),
+				new ContentQualityConfig());
+			Assert.Empty(pos);
+		}
+
+		[Fact]
+		public void ComputeReviewQuoteTriggers_EmptyExcerpt_ReturnsEmpty()
+		{
+			var pos = ContentQualityTriage.ComputeReviewQuoteTriggers(
+				QuoteRec("QUOTE_SYSTEM_MIX", string.Empty), new ContentQualityConfig());
+			Assert.Empty(pos);
+		}
 	}
 }

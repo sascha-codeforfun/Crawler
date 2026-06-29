@@ -18,7 +18,8 @@ namespace Crawler.Quality
 		/// zero-width character, or null if none. Returns the codepoint and
 		/// a short human-readable name. Used by Check.
 		/// </summary>
-		internal static (int Codepoint, string Name)? FindFirstControlChar(string s)
+		internal static (int Codepoint, string Name)? FindFirstControlChar(
+			string s, bool includeWhitespaceControls = true)
 		{
 			if (string.IsNullOrEmpty(s))
 			{
@@ -27,72 +28,13 @@ namespace Crawler.Quality
 
 			foreach (var ch in s)
 			{
-				if (ch == '\r')
+				var hit = DefectDetectionHelpers.ClassifyInvisible(ch, includeWhitespaceControls);
+				if (hit.HasValue)
 				{
-					return (ch, "CR (U+000D)");
-				}
-
-				if (ch == '\n')
-				{
-					return (ch, "LF (U+000A)");
-				}
-
-				if (ch == '\t')
-				{
-					return (ch, "TAB (U+0009)");
-				}
-
-				if (ch < 0x20)
-				{
-					return (ch, $"C0 control (U+{(int)ch:X4})");
-				}
-
-				if (ch >= 0x80 && ch <= 0x9F)
-				{
-					return (ch, $"C1 control (U+{(int)ch:X4})");
-				}
-
-				if (ch == '\u200B')
-				{
-					return (ch, "ZWSP (U+200B)");
-				}
-
-				if (ch == '\u200C')
-				{
-					return (ch, "ZWNJ (U+200C)");
-				}
-
-				if (ch == '\u200D')
-				{
-					return (ch, "ZWJ (U+200D)");
-				}
-
-				if (ch == '\uFEFF')
-				{
-					return (ch, "BOM/ZWNBSP (U+FEFF)");
-				}
-
-				if (ch >= '\u202A' && ch <= '\u202E')
-				{
-					return (ch, $"bidi control (U+{(int)ch:X4})");
-				}
-
-				if (ch >= '\u2066' && ch <= '\u2069')
-				{
-					return (ch, $"bidi isolate (U+{(int)ch:X4})");
-				}
-				// Unicode line-break characters that .NET ReadLine doesn't split
-				// on but text editors and other tooling may render as breaks.
-				if (ch == '\u2028')
-				{
-					return (ch, "LINE SEPARATOR (U+2028)");
-				}
-
-				if (ch == '\u2029')
-				{
-					return (ch, "PARAGRAPH SEPARATOR (U+2029)");
+					return hit;
 				}
 			}
+
 			return null;
 		}
 
@@ -104,7 +46,7 @@ namespace Crawler.Quality
 		/// (not per character) — Detail names the first bad codepoint.
 		/// </summary>
 		internal static IEnumerable<QualityIssue> Check(
-			string filename, HtmlDocument doc)
+			string filename, HtmlDocument doc, ContentQualityConfig config)
 		{
 			// Title text content.
 			var titleNode = doc.DocumentNode.SelectSingleNode("//title");
@@ -118,7 +60,7 @@ namespace Crawler.Quality
 						filename,
 						"CONTROL_CHARS_IN_CONTENT",
 						$"Found {hit.Value.Name} in <title> text",
-						LogExcerpt.Truncate(rawTitle));
+						LogExcerpt.Truncate(rawTitle, config.ContentQualityMaxExcerpt));
 				}
 			}
 
@@ -135,7 +77,38 @@ namespace Crawler.Quality
 						filename,
 						"CONTROL_CHARS_IN_CONTENT",
 						$"Found {hit.Value.Name} in meta[@name=\"{name}\"] content",
-						LogExcerpt.Truncate(decoded));
+						LogExcerpt.Truncate(decoded, config.ContentQualityMaxExcerpt));
+				}
+			}
+
+			// Editor-authored prose containers. The architect-class detector
+			// (INVISIBLE_CHAR_IN_BODY) deliberately SKIPS these same elements as
+			// "editor prose"; scanning them here is the complementary half, so an
+			// invisible in author content surfaces in triage instead of falling
+			// through the gap between the two detectors. Keyed on a text node's
+			// DIRECT parent — the architect detector's exact check — so the two
+			// partition body text with no overlap. One finding per offending
+			// element, mirroring the title/meta cards above.
+			var blockElements = config.ContentQualityBlockElements
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			foreach (var el in doc.DocumentNode.Descendants()
+				.Where(n => n.NodeType == HtmlNodeType.Element && blockElements.Contains(n.Name)))
+			{
+				// Direct text children only — text inside a nested inline child
+				// (<b>, <span>) has that child as its parent and belongs to the
+				// architect-class detector, not here.
+				var directText = string.Concat(el.ChildNodes
+					.Where(n => n.NodeType == HtmlNodeType.Text)
+					.Select(n => n.InnerText));
+				var decoded = WebUtility.HtmlDecode(directText);
+				var hit = FindFirstControlChar(decoded, includeWhitespaceControls: false);
+				if (hit.HasValue)
+				{
+					yield return new QualityIssue(
+						filename,
+						"CONTROL_CHARS_IN_CONTENT",
+						$"Found {hit.Value.Name} in <{el.Name}> text",
+						LogExcerpt.Truncate(decoded, config.ContentQualityMaxExcerpt));
 				}
 			}
 		}
