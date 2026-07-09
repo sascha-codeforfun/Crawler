@@ -1,0 +1,24 @@
+root = true
+
+# Line endings: LF everywhere (matches .gitattributes `eol=lf`), except the
+# solution file, which Visual Studio rewrites as CRLF on save.
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+
+[*.sln]
+end_of_line = crlf
+
+[*.cs]
+
+# IDE0305 - collection expression suggestions (e.g. trailing .ToList())
+# Only fire when the types match exactly, so .ToList()/.ToArray() chains are left alone
+dotnet_style_prefer_collection_expression = when_types_exactly_match
+
+# IDE0011 - prefer braces on if/else/etc.
+csharp_prefer_braces = true
+dotnet_diagnostic.IDE0011.severity = suggestion
+
+# When a boolean/binary expression is wrapped, put the && / || at the start of the next line
+dotnet_style_operator_placement_when_wrapping = beginning_of_line

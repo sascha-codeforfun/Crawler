@@ -1,0 +1,63 @@
+THIRD-PARTY NOTICES
+===================
+
+The Crawler application is licensed under the MIT License (see LICENSE.txt in
+the repository root).
+
+This product bundles the third-party components listed below. Each remains the
+property of its respective owner(s) and is distributed under the license shown.
+The Crawler's own MIT license does not alter those terms; the obligations below
+flow from each component's own license.
+
+The Crawler is distributed as a self-contained, single-file build, so the .NET
+runtime and the managed dependencies listed here travel inside the executable.
+
+Hunspell dictionaries (.aff/.dic) are NOT distributed with the Crawler.
+Operators supply their own; each dictionary carries its own license, which is
+the operator's responsibility and is not covered by this file.
+
+Image EXIF/IPTC metadata reading is performed by the Crawler's own code,
+implemented from the public EXIF/TIFF and IPTC-IIM specifications. It introduces
+no third-party dependency and is covered by the Crawler's MIT license.
+
+------------------------------------------------------------------------------
+1. HtmlAgilityPack 1.12.4
+   Copyright (c) ZZZ Projects Inc.
+   License: MIT  (SPDX: MIT)
+   Source:  https://github.com/zzzprojects/html-agility-pack
+   License text: licenses/MIT.txt
+
+------------------------------------------------------------------------------
+2. WeCantSpell.Hunspell 7.0.1
+   A C# port of Hunspell by Aaron Hudon.
+   Source: https://github.com/aarondandy/WeCantSpell.Hunspell
+
+   This component is tri-licensed, inherited from the original Hunspell project,
+   under MPL 1.1 / GPL 2.0 / LGPL 2.1. A tri-license permits the distributor to
+   elect one. For this distribution we elect the Mozilla Public License,
+   Version 1.1 (MPL 1.1), which permits combining the component into a larger
+   single product -- here, the self-contained single-file executable
+   (MPL 1.1 sec. 3.7) -- while the Crawler's own code remains under MIT.
+
+   The component is used unmodified; its corresponding source is available,
+   under the same license, at the Source URL above. This satisfies the
+   source-availability notice required by MPL 1.1 sec. 3.6.
+
+   Original Code: Hunspell, based on MySpell.
+   Initial Developers: Kevin Hendricks (MySpell) and Németh László (Hunspell).
+   Portions created by the Initial Developers are Copyright (C) 2002-2005 the
+   Initial Developers. All Rights Reserved.
+
+   License text: licenses/WeCantSpell.Hunspell.txt
+                 (the component's own tri-license notice, verbatim)
+                 licenses/MPL-1.1.txt
+                 (full text of the elected Mozilla Public License 1.1)
+
+------------------------------------------------------------------------------
+Bundled .NET runtime
+   Because the Crawler ships as a self-contained single-file build, it includes
+   the .NET runtime and base class libraries.
+   Copyright (c) .NET Foundation and Contributors.
+   License: MIT  (SPDX: MIT)
+   Source:  https://github.com/dotnet/runtime
+   License text: licenses/MIT.txt

@@ -1,0 +1,1091 @@
+// This JSON file is processed by the application to remove comments before deserialization.
+
+{
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1. CORE CRAWL
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Sites to operate on. One run processes ONE site: silent mode (--silent/-s)
+  // runs the single IsPrimary site with no prompt; interactive mode shows a
+  // numbered menu of all sites (Enter = the primary) so you confirm which site
+  // is about to be crawled. EXACTLY ONE site must have "IsPrimary": true.
+  //
+  // Per-site fields (a field lives here only if it would be WRONG when shared):
+  //   Name                 — operator-facing label shown in the menu and logs.
+  //   Tenant               — value substituted for the {tenant} token in global
+  //                          fields (CMS Path/filters, JSON-path prefixes, the
+  //                          CMS deeplink base, the dictionary filename, ...). This
+  //                          is what lets ONE global config body serve many
+  //                          same-kind sites — only the token flips per site.
+  //                          Optional: empty/missing → "default".
+  //   ProductionGroup      — value substituted for the {productiongroup} token,
+  //                          used for CMS deeplink routing (internal group values
+  //                          like "ni01" / "by02" that select a CMS routing
+  //                          subtree). Peer token to {tenant}; substituted across
+  //                          the same allow-list of fields, so any global field
+  //                          may carry either or both tokens. Optional: empty/
+  //                          missing → "default" (a default-group deeplink simply
+  //                          will not match any CMS route — harmless miss).
+  //   IsPrimary            — the default site (exactly one true).
+  //   Url                  — the target URL to crawl.
+  //   UrlSubdomainsAllowed — [KEEP] security boundary; the allowed subdomain base
+  //                          URLs for THIS site (scheme+host). Empty = primary
+  //                          domain only. Never followed unless listed here.
+  //   PostCrawlPass        — whether the CMS post-crawl pass runs for this site
+  //                          (the rest of CmsContentList stays global, below).
+  //
+  // Everything not listed above stays GLOBAL and is shared across sites; global
+  // fields that vary only by tenant or production-group use the {tenant} and
+  // {productiongroup} tokens instead of being duplicated per site. Configure
+  // real sites in config.private.json.
+  "Sites": [
+    {
+      "Name": "Example",
+      "Tenant": "tenant001",
+      "ProductionGroup": "pg01",
+      "IsPrimary": true,
+      "Url": "https://www.example.com",
+      // [KEEP] Security boundary — see README for security implications.
+      // Each entry is a full base URL (scheme + host); only URLs starting with one
+      // of these are followed. Example: ["https://help.example.com"].
+      "UrlSubdomainsAllowed": [],
+      "PostCrawlPass": false
+    }
+  ],
+
+  // Root folder where timestamped crawl session folders are created.
+  "BaseDirectory": "D:\\YOURCRAWLERFOLDERNAME",
+
+  // File extension pattern for pages to crawl. Use "*.html" for standard sites.
+  "FilePattern": "*.html",
+
+  // How the settle phase classifies a downloaded page when its requested URL
+  // extension, the response Content-Type header, and a byte sniff of the saved
+  // content disagree about whether it is HTML. Pages are saved provisionally as
+  // ".unverified" during the crawl and resolved here. One of:
+  //   "TrustByteSniff"   (default) decide from the bytes; not-HTML → quarantine.
+  //   "TrustContentType" believe the server header (escape hatch for fragment repos).
+  //   "Quarantine"       never analyse a mismatch; keep .unverified.
+  //   "AnalyseBlindly"   analyse every mismatch as HTML regardless ("hail mary").
+  // Quarantined (.unverified) files still count for 404 detection but are excluded
+  // from analysis. Disagreements are recorded in 23-contenttype-extension-mismatch.log.
+  // Takes effect on a NEW crawl only; replay reuses the original classification.
+  // Empty = default (TrustByteSniff). See README for each value's risk.
+  "UnverifiedHtmlPolicy": "TrustByteSniff",
+
+  // Counterpart to UnverifiedHtmlPolicy, for downloads whose requested extension,
+  // Content-Type header, and content disagree about whether they are a PDF. Kept
+  // separate from the HTML policy by design (PDF and HTML identity diverge). One of:
+  //   "TrustByteSniff"   (default) decide from the bytes (leading "%PDF-"); else keep .unverified.
+  //   "TrustContentType" believe the server header (application/pdf).
+  //   "Quarantine"       never treat a mismatch as a PDF; keep .unverified.
+  //   "AnalyseBlindly"   hand every mismatch to the PDF analyser regardless ("hail mary").
+  // A file treated as a PDF is renamed to ".pdf" so the PDF quality analyser finds it.
+  // Disagreements are recorded in 24-pdf-contenttype-extension-mismatch.log.
+  // Takes effect on a NEW crawl only; replay reuses the original classification.
+  // Empty = default (TrustByteSniff). See README for each value's risk.
+  "UnverifiedPdfPolicy": "TrustByteSniff",
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 2. CRAWL CONTROL (debug / replay)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Set DebugDisableCrawl to true to replay a previous snapshot without re-downloading.
+  // Set DebugTimeStamp to "latest" to automatically use the most recent snapshot,
+  // or to a specific timestamp folder name (e.g. "2026-04-13-18-44-22").
+  "DebugDisableCrawl": true,
+  "DebugTimeStamp": "latest",
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 3. NETWORK / PROXY
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  "UseProxy": false,
+  "ProxyUrl": "",
+
+  // Leave ProxyUser and ProxyPassword empty to use the current OS identity
+  // (correct for scheduled/silent runs under a service account authorised on the proxy).
+  // Only set these when the proxy requires a specific account.
+  // Store credentials in config.private.json, not here.
+  "ProxyUser": "",
+  "ProxyPassword": "",
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 4. PARALLELISM
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // 0 = use Environment.ProcessorCount automatically.
+  // Controls CPU-bound parallelism: simplification, normalization, attribute
+  // aggregation, self-link scanning, and lookup-file building.
+  "MaxDegreeOfParallelism": 0,
+
+  // Maximum simultaneous HTTP page downloads during crawling.
+  "MaxConcurrentPageDownloads": 100,
+
+  // Maximum simultaneous HTTP asset (image, css etc.) downloads during crawling.
+  "MaxConcurrentAssetDownloads": 200,
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 5. CMS / CONTENT LIST INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Path to a delimited export from your CMS containing page metadata.
+  // The file is a perishable input — operators export it manually from the CMS
+  // and it goes stale over time. The MaxAgeDays threshold bounds how old the
+  // file may be before the freshness check fires. The check runs immediately
+  // after [N] (new crawl) is chosen — before bandwidth is spent on the main
+  // crawl — and behaves as:
+  //   * Interactive + stale → prompts [I] Ignore (proceed) / [A] Abort.
+  //   * Silent + stale → main crawl runs, post-crawl pass is skipped,
+  //     logged to application.log only.
+  // Set MaxAgeDays to 0 (or negative) to disable the age check entirely
+  // (e.g. when scheduled runs should always perform the post-crawl pass).
+  // Comment is operator-facing prose, surfaced only when the age threshold
+  // is exceeded.
+  //
+  // Leave Path empty (or omit CmsContentList entirely) to disable all
+  // CMS-dependent features (content comparison, ticket generation
+  // package/location lookup).
+  //
+  // Field-order convention: toggle first (makes the rest moot if false),
+  // then file location, then documentation, then freshness, then parsing,
+  // then filtering, then extraction. Top-to-bottom matches the order of
+  // operations the code performs on the file.
+  "CmsContentList": {
+    // Post-crawl pass: download pages from 05-not-directly-crawlable.log that
+    // were not reached via normal link following. The on/off toggle is now
+    // PER SITE — set "PostCrawlPass": true/false inside the relevant "Sites"
+    // entry above, NOT here. The rest of this block stays global and is shared
+    // across sites; tenant-varying values use the {tenant} token. NOTE: the
+    // toggle only gates the download pass — spell-ticket metadata lookup reads
+    // the file regardless, as long as Path is valid.
+    "Path": "D:\\YOURCRAWLERFOLDERNAME\\YOURLISTOFCONTENTFROMCMS.csv",
+    "Comment": "Export from CMS XYZ via Admin → Reports → Content List. Refresh weekly or before any post-crawl-pass run.",
+    "MaxAgeDays": 7,
+
+    // CSV parsing.
+    "ColumnDelimiter": ";",
+    // Number of rows to skip before the header row. Use when your CMS export
+    // includes preamble rows above the column names. Default 0 = first row
+    // is the column header. Counted from row 1 — blank rows count, matching
+    // Power Query's Table.Skip semantic.
+    "SkipRows": 0,
+
+    // Row filtering: only rows containing RowFilter (and not RowNegativeFilter)
+    // are processed. RowsToExclude lists path substrings to skip entirely.
+    "RowFilter": "STRINGINEACHROWTOLOOKFOR",
+    "RowNegativeFilter": "PROPERTY1|PROPERTY2",
+    "RowsToExclude": [
+      "/folder/subfolder",
+      "/folder2/subfolder2"
+    ],
+
+    // Value extraction: when ValuePrefixReplace is true, the column value is
+    // prefixed with RowFilter and suffixed with ValueSuffix to form the
+    // path used for page matching. PathStripPrefix is stripped from spell-
+    // error URLs when matching against the path column (empty = use raw URL).
+    "ColumnIndex": 2,
+    "ValuePrefixReplace": true,
+    "ValueSuffix": ".html",
+    "PathStripPrefix": ""
+  },
+
+  // When true, the log shows the local file path alongside the URL.
+  "ShowLocalSourceInLog": false,
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 6. CRAWL FILTERING
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Query string parameters that carry a URL-encoded target URL to a modal or overlay page.
+  // The crawler extracts and follows the encoded target URL instead of the carrier page.
+  // Add one entry per parameter name your site uses (e.g. "lightbox", "modal", "overlay").
+  // Leave empty if the site does not use this pattern.
+  "ModalQueryParameters": [],
+
+  // Query string parameters to strip before comparing URLs during crawl
+  // (pipe-separated, e.g. "sessionid|utm_source").
+  "QueryStringParametersToIgnoreForCrawl": "QUERYSTRING1|QUERYSTRING2",
+
+  // Operator-curated list of substring patterns that exclude matching URLs
+  // from the crawl. Used for non-security operational filtering — sections
+  // you don't want crawled because the response is uninteresting or
+  // disproportionately large (forum URLs, CMS stub pages, etc.). NOT used
+  // for security: the security boundary (primary domain / configured
+  // subdomains) lives in Tools.IsValidLink's domain gate and is enforced
+  // regardless of what is or isn't in this list.
+  //
+  // Each entry:
+  //   "Value"   — required; substring matched (case-insensitive) anywhere
+  //               in the link URL. Empty Value on an enabled entry is a
+  //               startup error: Contains("") matches every link and would
+  //               reject the entire crawl. Validator catches that at config
+  //               load and halts before any crawl work begins.
+  //   "Enabled" — optional, default true; flip to false to keep an entry as
+  //               audit trail without effect (preserves Value + Comment for
+  //               the next investigator).
+  //   "Comment" — optional free text; operator's note about why the pattern
+  //               is excluded. Not consumed by the function.
+  //
+  // Default empty. Operators add patterns in config.private.json as their
+  // sites' operational needs require.
+  "DownloadExclusions": [],
+
+  // Path prefixes for JSON/script block URL extraction. Site-specific — configure
+  // in config.private.json only. Default empty = JSON path extraction disabled.
+  "ExtendedCrawlJsonPathPrefixes": [],
+
+  // Query string parameters ignored when determining whether a link is a self-link.
+  "QueryStringsToIgnoreForSelfLinkDetermination": [
+    "YOURQUERYSTRINGHERE"
+  ],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 6a. RESOURCE BLOAT THRESHOLDS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Base64 decoded asset size above which BASE64_LARGE is flagged in log 19 (KB).
+  "BloatThresholdBase64Kilobytes": 100,
+
+  // JS delta above site baseline above which EXTRA_JS is flagged in log 21 (KB).
+  "BloatThresholdJsKilobytes": 500,
+
+  // CSS delta above site baseline above which EXTRA_CSS is flagged in log 21 (KB).
+  "BloatThresholdCssKilobytes": 500,
+
+  // Minimum total JS+CSS delta above baseline for a page to appear in log 21 (KB).
+  // Lower this value as the site improves to surface the next tier of issues.
+  "BloatThresholdAboveBaselineKilobytes": 3000,
+
+  // File extensions to scan for embedded Base64 data URIs after crawl.
+  // Decoded assets are saved to base64assets/ for manual review.
+  // Add ".html" if you also want to scan HTML files.
+  // Set to [] to disable extraction entirely.
+  "Base64AssetFileExtensions": [ ".js", ".css" ],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 7. SITEMAP
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  "SitemapGeneratorExclusions": [
+    "/NEVERINCLUDEINMYSITEMAP.html",
+    "ANYURLSTRINGYOUWANTTOEXCLUDE",
+    "#"
+  ],
+  "SitemapGenerateForcedInclusions": [
+    "/IMPORTANTFOLDER/ALWAYSINCLUDEINSITEMAP.html"
+  ],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 10. SPELL-CHECK — META TAG HANDLING
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Meta-content spell-checking now lives under SpellCheckEngine.MetaContentNamesToSpellCheck
+  // (allowlist of meta names; built-in default {description, keywords}). The old top-level
+  // exclusion-pattern denylist is retired — the allowlist makes it unnecessary.
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 11. SPELL-CHECK — LANGUAGE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // DefaultLanguage now lives under SpellCheckEngine.DefaultLanguage
+  // (ISO 639-1 fallback when a page has no html lang / meta language; default "en" if absent).
+
+  // Per-page language overrides now live under SpellCheckEngine.PageLanguageOverrides
+  // (URL path prefix -> list of languages; longest prefix wins).
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 12. SPELL-CHECK — WORD HANDLING
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // German compound word trailing-hyphen handling.
+  // In German enumeration lists, compound word prefixes carry a trailing hyphen
+  // (e.g. "Lieferungs-, Zahlungs- und Rückgabebedingungen"). When a token on a
+  // German-language page ends with "-", the stem is checked as-is, then with each
+  // element stripped (longest first). Only applied to "de" pages — never English.
+  // Default ["s"]: Lieferungs- → strip "-" → Lieferungs (fails) →
+  //                strip "s" → Lieferung (passes ✅).
+  // Add further elements (e.g. "en", "er", "e", "es") if real content needs them.
+  "GermanFugenelemente": [ "s" ],
+
+  // URL patterns (case-insensitive substring match) for pages to skip entirely
+  // during spell-checking. No entries are written to 11-spell-error-sources.log or
+  // SpellErrorTracking.log for excluded pages. Use for pages with intentional
+  // multilingual content or other content that cannot be meaningfully spell-checked.
+  // Example: "/en/section/multilingual-page.html"
+  "SpellCheckExcludedUrls": [],
+
+  // URL patterns (case-insensitive substring match) for pages to skip entirely
+  // during content quality checks. No entries are written to 10-content-quality-issues.log
+  // for excluded pages. Independent of SpellCheckExcludedUrls — a page can be in
+  // one list, both, or neither.
+  "ContentQualityExcludedUrls": [],
+
+  // Named pattern groups scanned against simplified HTML source.
+  // Matches reported as UNWANTED_PATTERN in 10-content-quality-issues.log.
+  // Fields: Category (e.g. "Security"/"Style"/"Deprecated"), Name, CaseSensitive, Patterns.
+  // Patterns are plain substrings — no regex. Include surrounding chars as anchors.
+  // GroupPatterns true  = all matching patterns collapse into ONE issue per page.
+  //                       Use when patterns together signal one defect (e.g. #parameter#).
+  // GroupPatterns false = each pattern produces its own issue per page (default).
+  // Configure real patterns in config.private.json to keep internal details private.
+  "ContentUnwantedPatterns": [],
+
+  // Asset-level quality checks on downloaded raster images (JPEG/PNG/GIF/WebP).
+  // Findings → 25-asset-quality.log and IssueTracking as ASSET_* (composite Word
+  // ASSET_<check>:<detail>); auto-promoted, not interactively triaged. Thresholds
+  // are lenient by default — tighten from a quiet baseline. Tune against real data.
+  //   CheckMetadataLeakage  — flag AND extract publishable-leak metadata (GPS,
+  //                           camera make/model, author/artist/copyright, software,
+  //                           timestamps) via MetadataExtractor.
+  //   CheckDimensions       — flag degenerate (<=1px) or > MaxImageDimensionPixels.
+  //   CheckSize             — flag declared Content-Length vs actual mismatch
+  //                           (truncated/corrupt), or > MaxImageBytes.
+  //   SizeAndDimensionExclusions — URL/path substrings (case-insensitive) for assets
+  //                           where large size/dimensions are intentional (press,
+  //                           lightbox originals). Matching assets SKIP size+dimension
+  //                           checks; metadata leakage is STILL checked.
+  //   UnverifiedImagePolicy — how to settle an asset whose extension/Content-Type/bytes
+  //                           disagree about being an image. "" = TrustByteSniff (default);
+  //                           also TrustContentType, Quarantine, AnalyseBlindly.
+  "AssetQuality": {
+    "CheckMetadataLeakage": true,
+    "CheckDimensions": true,
+    "CheckSize": true,
+    "MaxImageBytes": 1048576,
+    "MaxImageDimensionPixels": 5000,
+    "SizeAndDimensionExclusions": [],
+    "UnverifiedImagePolicy": ""
+  },
+
+  // Prefixes stripped from hyphenated compound words before spell-checking.
+  // The remainder after stripping is what is checked and reported in errors.
+  // Stripping is recursive — longest prefix tried first regardless of list order.
+  // Exact matches (no remainder) are accepted outright.
+  "SpellCheckWordPrefixesToStrip": [
+    "YOURCOMPANYNAME",
+    "YOURCOMPANYNAME-ProductLine",
+    "ProductLine"
+  ],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 13. CONTENT QUALITY CHECKS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Checks for editorial quality issues distinct from spelling errors.
+  // Results written to 10-content-quality-issues.log (pipe-delimited).
+  "ContentQuality": {
+    // Scan for ligature characters (fi fl ff ffi ffl) in visible text.
+    // These appear when content is copy-pasted from PDFs or InDesign.
+    "CheckLigatures": true,
+
+    // Flag pages where <html lang="..."> and <meta name="language"> disagree.
+    // The html lang attribute wins for spell-checking. The meta tag is what
+    // needs correcting. Prevents mass false spell errors from wrong-dictionary
+    // selection caused by an incorrect CMS-set meta language tag.
+    "CheckLanguageMismatch": true,
+
+    // Scan <title> and <meta> content attributes for control characters,
+    // bidi controls and zero-width characters. These are invisible to CMS
+    // authors but commonly arise from copy-paste (Word, PDFs, web pages).
+    // They break downstream log parsing and are a potential injection vector
+    // against tooling consuming the output. Emits CONTROL_CHARS_IN_CONTENT
+    // naming the offending codepoint. Independent of sanitization at log-
+    // writer boundaries — this is the operator-facing diagnostic;
+    // sanitization is the silent operational defense.
+    "CheckControlCharsInContent": true,
+
+    // Flag pages that use typographic double-quote openers from more than one
+    // system on the same page (e.g. German and English openers mixed).
+    "CheckQuoteSystemMixing": true,
+
+    // Flag anchor tags that close mid-word — a common CMS authoring mistake
+    // where </a> is placed one character too early, splitting a word.
+    // Pattern: </a>[letter][space]. Zero false positives in valid HTML.
+    "CheckSplitWordAnchors": true,
+
+    // Detect structurally malformed anchor tags in raw downloaded HTML.
+    // MISPLACED_ANCHOR_EMPTY — anchor with no visible text (including anchors
+    //   containing only empty child elements such as empty spans or bolds).
+    // ADJACENT_ANCHOR (renamed from MISPLACED_ANCHOR_SPLIT in #452) — two
+    //   consecutive sibling anchors with no whitespace-text node between them,
+    //   AND a literal "</a><a" present in the rendered excerpt. Gated by the
+    //   finer AnchorDetection.DetectAdjacent (default false) — adjacency is a
+    //   structural fact, not a verdict, and many sites use it intentionally.
+    //   This top-level switch still controls both EMPTY and ADJACENT together.
+    "CheckMisplacedAnchors": true,
+
+    // Flag text nodes directly inside container elements (div, section etc.)
+    // without a wrapping block element — HTML authoring defect.
+    "CheckBareTextInContainers": true,
+
+    // Detect CMS-template-architect-class defects in raw downloaded HTML.
+    // Findings go to a SEPARATE log (22-cms-template-authoring-defects.log) so
+    // the operator can route them to the template / build-pipeline team rather
+    // than to content editors. See README section 13.
+    //   EMBEDDED_BOM_IN_BODY — UTF-8 BOM bytes (EF BB BF) at any position other
+    //     than file start; signature of concatenated UTF-8-with-signature
+    //     template fragments. Best practice: emit templates as UTF-8 WITHOUT BOM.
+    //   INVISIBLE_CHAR_IN_BODY — zero-widths, bidi controls, line/paragraph
+    //     separators, C0/C1 controls in body text whose parent element is NOT in
+    //     ContentQualityBlockElements. Scope filter routes architect-class
+    //     findings vs. editor-paste-class findings.
+    "CheckCmsTemplateAuthoringDefects": true,
+
+    // Structural well-formedness checks on raw downloaded HTML. Findings go to
+    // 10-content-quality-issues.log as MALFORMED_HTML with the sub-defect in the
+    // Detail column (composite Word MALFORMED_HTML:<sub-defect>). Auto-promoted to
+    // IssueTracking; not interactively triaged — these are server-side / templating
+    // bugs, not editorial decisions. Each sub-check is independently gateable.
+    //   DetectContentBeforeDoctype — non-whitespace content before the opening
+    //     <!doctype>/<html>/<?xml> token (after an optional leading BOM). Near-zero
+    //     false positives; almost always a backend templating / error-injection bug.
+    //   DetectHtmlParseErrors — bridges HtmlAgilityPack's parser errors into
+    //     MALFORMED_HTML:<code> findings, one per (file, code), occurrence count in
+    //     the Context. SuppressParseErrorCodes filters cosmetic codes at detection;
+    //     seeded with EndTagNotRequired (HAP flags valid optionally-closed tags such
+    //     as <li>/<p>/<td> with this code — not a defect). Add codes to suppress
+    //     more, or clear the list to surface every code. Case-insensitive.
+    "MalformedHtml": {
+      "DetectContentBeforeDoctype": true,
+      "DetectHtmlParseErrors": true,
+      "SuppressParseErrorCodes": [ "EndTagNotRequired" ]
+    },
+
+    // Per-sub-check gating for structural anchor finding types. Currently scopes
+    // ADJACENT_ANCHOR (was MISPLACED_ANCHOR_SPLIT, renamed #452 to remove the
+    // misleading "SPLIT" overlap with SPLIT_WORD_ANCHOR).
+    //
+    //   DetectAdjacent — when true, two consecutive sibling anchors with no
+    //     whitespace-text node between them, AND a literal "</a><a" in the
+    //     rendered excerpt, fires as ADJACENT_ANCHOR. Default FALSE because
+    //     adjacency is a structural fact, not a verdict: many sites use adjacent
+    //     <a><a> intentionally — CSS-spaced button rows (a { padding-right: 5px }),
+    //     JS-driven trigger widgets (href="#" buttons opening overlays), dense
+    //     navigation. Whether the pattern indicates a defect depends on the site's
+    //     design paradigm, which the tool cannot know. Operator enables this after
+    //     reviewing whether their site rules adjacency in.
+    //
+    // The outer CheckMisplacedAnchors still controls both MISPLACED_ANCHOR_EMPTY
+    // and ADJACENT_ANCHOR together; this finer block opts ADJACENT alone in or out.
+    "AnchorDetection": {
+      "DetectAdjacent": false
+    },
+
+    // Per-language apostrophe / elision profiles. Disambiguates typographic
+    // single quotes (U+2018, U+2019, U+02BC) from quote openers/closers in
+    // stack-based quote-pairing analysis. The profile is selected by the page's
+    // <html lang="…"> attribute (lowercase 2-letter base code; de-DE → de).
+    // "_default" is the fallback for pages with no lang attribute or a language
+    // not listed here. Empty profile is valid — Rule 2 (between-letters) still
+    // catches the common cases.
+    //
+    // SuffixElisions — letters AFTER the apostrophe (Germanic/Anglic): it's, 'ner.
+    // PrefixElisions — letters BEFORE the apostrophe (Romance): l'accès, qu'il.
+    // ApostropheChars — characters that count as apostrophes for THIS language.
+    //                   Default [U+2018, U+2019]. Turkish/Ukrainian add U+02BC.
+    "ContentQualityApostropheElisions": {
+
+      "_default": {
+        "ApostropheChars": [ "\u2018", "\u2019" ],
+        "SuffixElisions": [],
+        "PrefixElisions": []
+      },
+
+      // English contractions: it's, don't, I'd, we'll, you've, they're, I'm.
+      // WordFinalSPossessive: treat "visitors'", "Users'", "boss'" as possessive,
+      // not an orphan quote closer (English plural/s-ending possessive convention).
+      "en": {
+        "SuffixElisions": [ "s", "t", "d", "ll", "ve", "re", "m" ],
+        "WordFinalSPossessive": true
+      },
+
+      // German colloquial elisions: gibt's, 'n, 'ne, 'ner Kerl, 'nem, 'nen, 'mal.
+      "de": {
+        "SuffixElisions": [ "s", "n", "ne", "ner", "nem", "nen", "mal" ]
+      },
+
+      // French elisions are prefix-style: l'accès, d'un, n'en, s'il, j'ai,
+      // m'a, t'es, c'est, qu'il, lorsqu'il, puisqu'il, quoiqu'il, jusqu'à.
+      "fr": {
+        "PrefixElisions": [
+          "l",
+          "d",
+          "n",
+          "s",
+          "j",
+          "m",
+          "t",
+          "c",
+          "qu",
+          "lorsqu",
+          "puisqu",
+          "quoiqu",
+          "jusqu"
+        ]
+      },
+
+      // Italian: same Romance pattern. l'amico, dell'arte, un'idea, sull'isola,
+      // all'opera, dall'alto, nell'aria, c'è, dov'è, quell'uomo, sant'Antonio.
+      "it": {
+        "PrefixElisions": [
+          "l",
+          "un",
+          "dell",
+          "sull",
+          "all",
+          "dall",
+          "nell",
+          "c",
+          "dov",
+          "quell",
+          "sant",
+          "anch",
+          "tutt",
+          "mezz"
+        ]
+      },
+
+      // Spanish: apostrophe elision is rare in standard orthography.
+      "es": {},
+
+      // Portuguese: apostrophe mostly in proper names (d'Água); listing
+      // the most common prepositional forms for safety.
+      "pt": {
+        "PrefixElisions": [ "d", "n" ]
+      },
+
+      // Catalan: Romance prefix pattern. l'home, d'aigua, n'hi, s'ha,
+      // m'agrada, t'estimo.
+      "ca": {
+        "PrefixElisions": [ "l", "d", "n", "s", "m", "t" ]
+      },
+
+      // Dutch: 's morgens, 's avonds, 't huis (suffix after apostrophe);
+      // foto's, baby's, auto's (suffix 's' on vowel-ending plurals).
+      "nl": {
+        "SuffixElisions": [ "s", "t", "n" ]
+      },
+
+      // Turkish: proper-noun + suffix separator. İzmir'de, Türkiye'nin,
+      // Ankara'ya, Atatürk'ün. U+02BC is the orthographic standard,
+      // U+2019 is the web compromise — both listed.
+      // Real-world verification pending.
+      "tr": {
+        "ApostropheChars": [ "\u2019", "\u02BC" ],
+        "SuffixElisions": [
+          "de",
+          "da",
+          "te",
+          "ta",
+          "den",
+          "dan",
+          "ten",
+          "tan",
+          "e",
+          "a",
+          "ye",
+          "ya",
+          "in",
+          "\u0131n",
+          "un",
+          "\u00FCn",
+          "nin",
+          "n\u0131n",
+          "nun",
+          "n\u00FCn",
+          "i",
+          "\u0131",
+          "u",
+          "\u00FC",
+          "yi",
+          "y\u0131",
+          "yu",
+          "y\u00FC",
+          "ler",
+          "lar",
+          "le",
+          "la"
+        ]
+      },
+
+      // Polish: apostrophe mainly in foreign-name declension.
+      // Kennedy'ego, Joyce'a, Bush'a.
+      "pl": {
+        "SuffixElisions": [ "a", "ego", "emu", "em", "ie", "\u00F3w", "owi" ]
+      },
+
+      // Czech: rare. Empty profile; Rule 2 covers strays.
+      "cs": {},
+
+      // Ukrainian: U+02BC marks hardness before iotated vowels within words
+      // (п'ять, ім'я). Not an elision in the Romance sense; including U+02BC
+      // ensures it isn't misread as a quote character.
+      "uk": {
+        "ApostropheChars": [ "\u2019", "\u02BC" ]
+      },
+
+      "ru": {},
+      "bg": {},
+
+      // Romanian: apostrophe elision restricted to poetic/archaic forms.
+      "ro": {
+        "PrefixElisions": [ "s", "ne", "mi", "te" ]
+      },
+
+      "hu": {}
+    },
+
+    // Block elements whose text is checked per-block for quote/punctuation issues.
+    // Each block is analysed independently — cross-block pairs are not detected.
+    "ContentQualityBlockElements": [ "p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th" ],
+
+    // Container elements that must not contain unwrapped direct text nodes.
+    // Bare text in these elements is flagged as BARE_TEXT_IN_CONTAINER.
+    "ContentQualityContainerElements": [ "div", "section", "article", "aside", "header", "footer", "main" ],
+
+    // Operator-configured suppression rules for content-quality findings.
+    // Use to dampen site-specific template noise without disabling the
+    // underlying check (which would mask similar findings elsewhere).
+    // Each rule:
+    //   "Type"    — required; the IssueType to suppress (e.g. BARE_TEXT_IN_CONTAINER)
+    //   "Value"   — optional; case-sensitive substring matched against Detail+Context
+    //               (empty/missing = match any value within the Type)
+    //   "Pages"   — optional; list of *-globs matched against Filename
+    //               (empty/missing = global; e.g. ["*demo-page*","*foo.html"])
+    //   "Enabled" — optional, default true; flip to false to temporarily audit
+    //               what a rule was hiding without deleting it
+    //   "Comment" — optional free text; echoed in the per-rule console summary
+    // Matching findings are dropped from the log entirely. Per-rule hit counts
+    // appear in the console summary; rules with zero hits emit a warning.
+    // Default empty. Site-specific rules go in config.private.json.
+    "ContentQualityIssueSuppressions": [],
+
+    // Crawl-history diagnostic — forensic auditing of crawl history. Walks
+    // every configured site's timestamp folders, computes per-crawl size and
+    // file-count statistics, scans HTML bodies for operator-curated substring
+    // markers, joins marker-positive findings with their header sidecars via
+    // configured regex extractors, and writes one per-site log to that site's
+    // working folder. Useful for verifying download integrity across runs and
+    // for handing forensic records to operators of the systems being crawled.
+    //
+    // "Enabled"          — master switch. Default false (feature is opt-in).
+    //                      When false: the diagnostic is fully dormant — no
+    //                      prompt at startup, no work, no log output. When
+    //                      true: an interactive Y/N prompt fires at startup
+    //                      and the operator chooses whether to run for this
+    //                      session. Silent mode always skips the prompt.
+    // "HtmlMarkers"      — substrings searched (case-sensitive) inside each
+    //                      downloaded HTML body. A body matching any enabled
+    //                      marker is reported in the log with its header
+    //                      sidecar's forensic fields. Per entry:
+    //                        "Name"    — operator-facing label (cosmetic)
+    //                        "Value"   — required; the substring to search for
+    //                        "Enabled" — optional, default true
+    //                        "Comment" — operator's reasoning, surfaces in log
+    // "HeaderExtractors" — regex extractors applied to header sidecars of
+    //                      marker-positive responses; capture group 1 becomes
+    //                      a column in the log table named after the
+    //                      extractor's Label. Per entry:
+    //                        "Label"   — required; column heading
+    //                        "Pattern" — required; regex with one capture
+    //                                    group (validated at config load —
+    //                                    invalid regex halts the app)
+    //                        "Enabled" — optional, default true
+    //                        "Comment" — operator's reasoning
+    //                      The first enabled extractor's distinct value count
+    //                      surfaces in the headline table as "TokenCount" — a
+    //                      single-glance scope indicator. Operators order
+    //                      config so the meaningful clustering field comes
+    //                      first.
+    //
+    // Empty lists are valid: with no markers configured the diagnostic still
+    // produces the per-crawl size/file-count table, useful for crawl-size
+    // anomaly detection on its own. Add markers/extractors in
+    // config.private.json as investigations require.
+    "CrawlHistoryDiagnostic": {
+      "Enabled": false,
+      "HtmlMarkers": [],
+      "HeaderExtractors": []
+    },
+
+    // Stack-based pairing analysis: flags unmatched openers, wrong closers,
+    // and closers with no typographic opener. May produce false positives
+    // on pages with many apostrophes. Enable once system-mixing check is stable.
+    "CheckQuotePairing": true,
+
+    // When spell-check produces >= TranslationIssueErrorThreshold errors on a page,
+    // check whether >= TranslationIssuePassRatio pass another loaded dictionary.
+    // If so, flag as POTENTIAL_TRANSLATION in 10-content-quality-issues.log and remove
+    // those words from spell errors. Elements reported as groups, not word lists.
+    "CheckPotentialTranslation": true,
+    "TranslationIssueErrorThreshold": 5,
+    "TranslationIssuePassRatio": 0.6,
+
+    // Radius in characters for non-quote issue excerpts (LIGATURE, SPLIT_WORD_ANCHOR,
+    // UNWANTED_PATTERN). Excerpt window = 2 × radius centred on the issue position.
+    "ContentQualityExcerptRadius": 120,
+
+    // When true, quote excerpts expand to the nearest sentence boundary instead of
+    // using a fixed radius. Useful for long German sentences.
+    "ContentQualityQuoteFullSentence": true,
+
+    // Maximum character length for quote excerpts when ContentQualityQuoteFullSentence
+    // is true. Increase if excerpts are still truncated for long sentences.
+    "ContentQualityMaxExcerpt": 400
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 13b. SEO DERIVED-ISSUE CHECKS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Derived SEO issue checks evaluated over 08-seo-data.log. Findings flow into
+  // IssueTracking.log as Type=SEO, with the specific finding in the Word field
+  // (MissingTitle, TitleTooShort/TooLong, InconsistentTitleFormat, MissingDescription,
+  // DescriptionTooShort/TooLong, MetaKeywordsPresent, MissingH1, MultipleH1).
+  // Length bounds are character counts (a proxy for pixel truncation) and are tunable.
+  "Seo": {
+    // Titles shorter/longer than these flag TitleTooShort / TitleTooLong.
+    // Asymmetric when TitleTemplates is set: too-short measures the WHOLE title
+    // (brand framing counts toward the minimum — "Our Cars | Brand" is fine),
+    // too-long measures the {title} core only (the brand suffix is truncated by
+    // search engines, so it must not count toward the maximum).
+    "TitleMinLength": 30,
+    "TitleMaxLength": 60,
+
+    // Optional set of accepted title formats, each with exactly one {title}
+    // placeholder. Literal text before and/or after {title} is the expected brand
+    // framing — works either way:
+    //   "{title} | Company"   (brand as suffix)
+    //   "Company | {title}"   (brand as prefix)
+    // A title conforms if it matches ANY entry; entries are tried in order and the
+    // first full match wins. The matched entry's framing is stripped before the
+    // too-long length measurement (so a long brand name does not cause false
+    // TitleTooLong), and a title matching no entry is flagged InconsistentTitleFormat
+    // (catches typo'd/wrong-cased brand). Strict match — no whitespace/case tolerance.
+    // Empty list disables both behaviours (whole-title length, no conformance check).
+    // Any visible script is allowed (e.g. a Cyrillic or CJK brand name); only
+    // invisible characters are rejected. Example: [ "{title} | Company", "{title} | Second Company" ]
+    "TitleTemplates": [],
+
+    // Meta-description length bounds.
+    "DescriptionMinLength": 70,
+    "DescriptionMaxLength": 160,
+
+    // Flag pages carrying a <meta name="keywords"> tag (MetaKeywordsPresent). The
+    // keywords meta is ignored by search engines since ~2009 and can leak targeting.
+    "MetaKeywordsFlagAsError": true,
+
+    // Flag pages with zero <h1> (MissingH1) — a real structural/accessibility gap.
+    "MissingH1FlagAsError": true,
+
+    // Flag pages with more than one <h1> (MultipleH1). Off by default: search
+    // engines do not penalise multiple H1s, but the count is a reliable tell for
+    // CMS/templating defects, so opt in if you want it surfaced.
+    "MultipleH1FlagAsError": false,
+
+    // Allow-list of meta-robots values for which a page is treated as an SEO
+    // target. Content findings (title/description/H1/keywords) are emitted ONLY
+    // for pages whose robots value is in this list; everything else is suppressed
+    // as noise (noindex tech/print/staging pages are not search targets). The
+    // default honours Google: every state Google indexes is listed — "" (no robots
+    // meta is indexable by default), index, and the follow/nofollow combinations —
+    // so only noindex/none pages are suppressed out of the box. Narrow the list
+    // (e.g. to ["index","index,follow"]) to scope findings to explicitly-indexable
+    // pages, e.g. when staging which pages to optimise before making them live.
+    // Matching is normalised (lower-cased, spaces stripped, directives sorted), so
+    // "index, follow", "INDEX,FOLLOW" and "follow,index" all match "index,follow".
+    // The "" entry matches a page with no robots meta; remove it to suppress those.
+    "IndexableRobotsValues": [ "", "index", "index,follow", "index,nofollow", "nofollow" ]
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 14. DICTIONARIES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  "CustomDictionaryFile": "user_dictionary.dic",
+
+  // Dictionary bundles — one entry per language the crawler will spell-check.
+  // LanguageCode must match the ISO 639-1 code in html lang attributes (e.g. "en", "de").
+  // DicFile and AffFile are paths relative to the application working directory.
+  // Configure in config.private.json to keep file paths out of the shared config.
+  // Shape of one entry (leave the checksums empty on the first run; the app
+  // computes them, writes them to application.log, and halts so you paste them in):
+  //   {
+  //     "DisplayName":  "English",
+  //     "Comment":      "optional note (why this dictionary)",
+  //     "LanguageCode": "en",
+  //     "DicFile":      "dictionaries\\en_US.dic",
+  //     "AffFile":      "dictionaries\\en_US.aff",
+  //     "DicChecksum":  "",
+  //     "AffChecksum":  ""
+  //   }
+  // A copy-paste example, and where to find dictionaries, is in dictionaries\readme.txt.
+  "DictionaryBundles": [],
+
+  // Dictionary maintenance — end-of-run orphan/redundancy review for the user and
+  // site dictionaries. Orphans are discovered by the cross-off usage recorder during
+  // spell-check (an entry never consulted on any page is an orphan), so there is no
+  // separate corpus scan. Pinned entries (prefixed with '!') are always exempt.
+  //   Mode "Off"         — does nothing (default).
+  //   Mode "Report"      — writes 15-user-dictionary-orphan-words.log only; mutates
+  //                        nothing; runs in silent crawls too. Use to review first.
+  //   Mode "Interactive" — offers each flagged word (remove/pin/keep), then backs up,
+  //                        cleans, and sorts the affected dictionaries. Non-silent only.
+  // SortCulture: BCP 47 tag for sorting in Interactive mode (e.g. "de-DE" sorts
+  // Ä/Ö/Ü alongside A/O/U). Update* flags select which dictionaries are in scope.
+  "DictionaryMaintenance": {
+    "Mode": "Off",
+    "SortCulture": "en-US",
+    "UpdateUserDictionary": true,
+    "UpdateSiteSpecificDictionary": true
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 15. SPELL ERROR TRACKING AND TICKET GENERATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Content quality triage — groups issues by type and page for interactive
+  // promotion to IssueTracking.log. Runs between quality analysis and spell-check.
+  // Only active in non-silent mode. Configure in config.private.json.
+  "EnableContentQualityTriage": false,
+
+  // Attribute triage — presents only attribute-sourced entries.
+  // Hotkeys: [K] Keep  [A] Add to config  [S] Skip  [Q] Quit
+  // Run before InteractiveSpellCheckTriage to clean up attribute bleedover first.
+  "InteractiveAttributeTriage": false,
+
+  // Spell-check triage — presents only text node / unknown source entries.
+  // Hotkeys: [T] Ticket  [L] Locale  [W] Wontfix  [I] Investigate  [S] Skip  [Q] Quit
+  "InteractiveSpellCheckTriage": false,
+
+  // Retention window for resolved ("fixed") records in IssueTracking.log.
+  //   0   = keep all fixed forever (default)
+  //   > 0 = purge fixed older than N days (by DateLastSeen)
+  //   -1  = purge ALL fixed now (dev/reset; any negative = purge-all)
+  // Only "fixed" is purged; wontfix/config and open statuses are kept.
+  "IssueTrackingFixedRetentionDays": 0,
+
+  // Comment written to wontfix entries when [K] Keep is pressed during triage.
+  // Configure in config.private.json to use your preferred language.
+  "TriageKeepAttributeComment": "Real text — keep attribute for spell-checking",
+
+  // Up to 4 common localisation error types shown when [L] is pressed.
+  // Option 0 is always custom. Supports placeholders:
+  //   {language} — replaced with the page language code (e.g. "de", "en")
+  //   {word}     — replaced with the triaged word
+  // Configure in config.private.json. Entries beyond 4 are ignored.
+  "TriageLocalisationKnownTypes": [],
+
+  // Comment written to pending entries when [L] Locale is pressed during triage.
+  // Configure in config.private.json to use your preferred language.
+  "TriageLocalisationComment": "Translation missing — content not localised for page language",
+
+  // Up to 4 common ticket reason types shown when [T] is pressed.
+  // Option 0 is always custom. Supports placeholders:
+  //   {word}     — replaced with the triaged word
+  //   {language} — replaced with the page language code
+  // Configure in config.private.json. Entries beyond 4 are ignored.
+  "TriageTicketKnownTypes": [],
+
+
+  // Wontfix comment options shown when [W] -> [S] -> [2] is pressed.
+  // Up to 4 entries, option 0 always custom. Supports placeholders:
+  //   {word}     — replaced with the triaged word
+  //   {language} — replaced with the page language code
+  // [U] always adds to user dictionary (no comment options shown).
+  // [S][1] always adds to site dictionary (no comment options shown).
+  // Configure in config.private.json. Entries beyond 4 are ignored.
+  "TriageWontfixKnownTypes": [],
+
+  // Ticket generation from CmsContentList metadata.
+  // All fields are optional — leave empty to disable the feature or specific columns.
+  // Configure real column names, templates, and CMS URLs in config.private.json
+  // to keep internal structure out of the public config.
+  //
+  // Available template placeholders:
+  //   {Location}    — resolved from UrlSourceColumn via UrlSourceLocalName/UrlSourceExternalName
+  //   {Url}         — full page URL where the spelling error was found
+  //   {Package}     — resolved from PackageColumn (e.g. the module/section name)
+  //   {CmsLink}     — direct CMS editor link built from CmsEditorBaseUrl + PFAD column
+  //   {SpecialInfo} — label from SpecialInfoMappings when a column value matches
+  //   {Language}    — page language used for spell-checking (e.g. "de", "en")
+  //   {Errors}      — bullet list of spelling errors, lines separated by [LF]
+  //
+  // [LF] in the template becomes a real line break in TicketText.log
+  // and stays as the literal string [LF] in SpellErrorTicketDraft.log for Excel.
+  "TicketGeneration": {
+    // Days after DateReported before a pending ticket is considered overdue
+    // and resurfaces in the next run's tracking output. Crawler writes
+    // DateExpiry = DateReported + OverdueAfterDays when it detects
+    // DateReported was filled in and DateExpiry is still empty.
+    "OverdueAfterDays": 30,
+
+    "UrlSourceColumn": "",
+    "UrlSourceLocalName": "",
+    "UrlSourceExternalName": "",
+
+    // Column in CmsContentList holding the package/module name → {Package}.
+    // Configure in config.private.json.
+    "PackageColumn": "",
+
+    // Column in CmsContentList holding the page content path → used to build {CmsLink}.
+    // May be the same column as PathColumn if your CSV uses one column for both
+    // row matching and CMS path construction. Configure in config.private.json.
+    "CmsPathColumn": "",
+
+    // Base URL of the CMS editor. {CmsLink} = CmsEditorBaseUrl + path column value + CmsEditorBaseUrlSuffix.
+    // Example: "https://cms.example.com/editor.html"
+    // Configure in config.private.json.
+    "CmsEditorBaseUrl": "",
+
+    // Suffix appended to the CSV path when building {CmsLink}.
+    // Use when the path column lacks a file extension (e.g. ".html").
+    // Leave empty if the path column already contains the full path.
+    "CmsEditorBaseUrlSuffix": "",
+
+    // Mappings from CSV column values to the {SpecialInfo} placeholder.
+    // Each entry checks Column against Pattern (wildcard, case-insensitive).
+    // * matches any sequence of characters. First match wins.
+    // Label is the full text that replaces {SpecialInfo} in the ticket —
+    // use a complete sentence since {SpecialInfo} is empty when nothing matches.
+    // Configure in config.private.json. Two examples showing the pattern:
+    // [
+    //   { "Column": "YourStatusColumn", "Pattern": "AutoPublish*", "Label": "(auto-published)" },
+    //   { "Column": "YourStatusColumn", "Pattern": "Locked*",      "Label": "(locked by workflow)" }
+    // ]
+    "SpecialInfoMappings": [],
+
+    // Column in CmsContentList used to match rows to page URLs.
+    // May be the same column as CmsPathColumn. Configure in config.private.json.
+    "PathColumn": "YourPathColumn",
+
+    // Ticket text template for a single spelling error. With #462 the
+    // page-level provenance moved to TicketShellTemplate below, so this is now
+    // just the spelling section's intro line + the error bullets ({Errors}).
+    // Configure in config.private.json.
+    "SingleErrorTemplate": "there is a spelling error:[LF]{Errors}",
+
+    // Ticket text template for multiple spelling errors (same as above, plural).
+    // Configure in config.private.json.
+    "MultipleErrorsTemplate": "there are spelling errors:[LF]{Errors}",
+
+    // #462 — Page-level provenance block, rendered ONCE per ticket above all
+    // finding-type sections. Placeholders: {Url}, {Location}, {Package},
+    // {CmsLink}, {SpecialInfo}. Field-independent collapse: an empty {Package}
+    // drops its " - <label>: " fragment, an empty {SpecialInfo} drops its
+    // leading space, an empty {CmsLink} drops that whole line — each keyed only
+    // on its own emptiness (no inference between fields). Leave empty to omit
+    // the shell. Configure in config.private.json.
+    "TicketShellTemplate": "On the page[LF]{Url}[LF][LF]Source: {Location} - Module: {Package} {SpecialInfo}[LF][LF]CMS: {CmsLink}",
+
+    // #462 — Finding types eligible for TicketText.log, in SEVERITY ORDER
+    // (worst first). List order drives section order within a ticket and which
+    // types appear in the headline (the worst two present). "Type" matches the
+    // app's internal finding name (e.g. the Type IssueTracking records);
+    // "Label" is the operator-facing text emitted in the ticket. Only listed
+    // types are emitted — an unlisted type is silently excluded. When the
+    // list is empty, no types are eligible and no tickets are produced.
+    // Configure in config.private.json.
+    "TicketIssueTypes": [
+      { "Type": "404",      "Label": "Broken links (404)" },
+      { "Type": "SPELLING", "Label": "Spelling errors" },
+      { "Type": "QUALITY",  "Label": "Content quality" }
+    ],
+
+    // #462 — Section intro line per finding type, keyed by the same Type token.
+    // Spelling reuses Single/MultipleErrorsTemplate above (it has the
+    // single/plural split), so it need not appear here; other types do. A
+    // "<TYPE>_PLURAL" entry supplies count-sensitive wording for that type.
+    // Missing key falls back to the type's Label. Configure in config.private.json.
+    "TicketSectionIntros": [
+      { "Type": "404", "Text": "The following links are broken:" },
+      { "Type": "QUALITY", "Text": "The following content quality issue was found:" },
+      { "Type": "QUALITY_PLURAL", "Text": "The following content quality issues were found:" }
+    ],
+
+    // #462 — Operator action advice rendered ABOVE the copy-paste ticket body,
+    // fenced off so it is clearly NOT part of the pasted ticket. Guidance for
+    // the raise/bump decision; never enters the ticket itself. Placeholders:
+    //   {NewCount}     — newly-found findings on this URL
+    //   {OverdueCount} — findings whose tracking has gone overdue
+    //   {ShownCount} / {TotalCount} — findings shown / total on this URL
+    // Leave ActionAdviceHeader empty to suppress the action zone.
+    // Configure in config.private.json.
+    "ActionAdviceHeader":  "ACTION — do not copy into ticket",
+    "ActionAdviceNew":     "Raise a new ticket. {ShownCount} of {TotalCount} findings shown.",
+    "ActionAdviceOverdue": "Bump the existing ticket: {OverdueCount} finding(s) overdue, {NewCount} newly added.",
+
+    // Optional one-line headline rendered ABOVE each ticket block in
+    // TicketText.log for copy-paste into ticket-system title fields.
+    // Supports placeholders:
+    //   {Prefix}        — value of TicketPrefix below
+    //   {IssueType}     — composed from the worst two TicketIssueTypes present
+    //                     (empty when no listed type is present on the page)
+    //   {PathIndicator} — page URL with domain + query stripped, then
+    //                     shortened via PathShortenSegments below
+    // Empty placeholders collapse their surrounding " - " separators cleanly.
+    // Leave empty to suppress the headline. Configure in config.private.json.
+    "TicketHeadlineTemplate": "",
+
+    // Value for the {Prefix} placeholder in TicketHeadlineTemplate.
+    // Typically a short workflow tag (e.g. "WEBSITE", "CMS-QA").
+    // Leave empty to omit from headline. Configure in config.private.json.
+    "TicketPrefix": "",
+
+    // Path-segment substrings replaced with "..." in the {PathIndicator}
+    // placeholder. Each entry matches a complete URL path segment between
+    // slashes — "/foo/" matches, "/foo-bar/" does not. Each match becomes
+    // its own "/.../" (path depth is preserved, consecutive matches don't
+    // collapse). Filename protection is natural: the last segment has no
+    // trailing slash, so "page.html" cannot match "/page.html/".
+    //
+    // Validation: entries must be 4+ characters — shorter entries would
+    // not actually shorten the path (replacing /abc/ with /.../ saves
+    // nothing). Interactive runs halt on shorter entries; silent runs
+    // warn and skip the bad entries, applying the valid ones.
+    //
+    // Example: ["privatkunden", "pensions"] turns
+    //   /de/home/privatkunden/pensions/page.html
+    // into
+    //   /de/home/.../.../page.html
+    "PathShortenSegments": [],
+
+    // Annotation appended to a bullet point when the word fails every loaded dictionary.
+    // Leave empty to suppress. Configure in config.private.json.
+    // Example: "unknown in all dictionaries"
+    "AnnotationUnknownInAll": "",
+
+    // Annotation appended when the word fails only the page language dictionary
+    // but passes another (e.g. English word on a German page).
+    // Leave empty to suppress. Configure in config.private.json.
+    // Example: "foreign language word — please verify if intentional"
+    "AnnotationForeignLanguageWord": ""
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 16. NORMALIZATION REPLACEMENTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // String replacements applied to HTML before normalization.
+  // Fields: Name, Value (find), Replacement (replace with), Comment, Pages (optional).
+  // Pages: URL patterns (case-insensitive substring). Empty = global (all pages).
+  //   Non-empty = scoped to matching pages only — use for site-specific content
+  //   on a few pages (e.g. a Windows path embedded in one page's HTML).
+  //   Example: "Pages": ["/glossar.html"] applies only to pages matching that path.
+  // Value may contain non-ASCII characters intentionally (e.g. smart quotes).
+  "NormalizationReplacements": [
+    {
+      "Name": "UniqueNameYouCanChoose",
+      "Value": "YourStringToReplace",
+      "Replacement": "ReplacementYouPick",
+      "Comment": "Comment to explain why this rule exists"
+    },
+    {
+      "Name": "MULTIPLICATION_SIGN",
+      "Value": "&#x00D7;",
+      "Replacement": " ",
+      "Comment": "x multiplication sign (will be filtered before spell check)"
+    }
+  ]
+}

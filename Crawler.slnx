@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Export" />
+    <BuildType Name="Release" />
+  </Configurations>
+  <Project Path="Crawler\Crawler.csproj" />
+  <Project Path="Crawler.Tests\Crawler.Tests.csproj" />
+</Solution>
