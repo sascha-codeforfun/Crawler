@@ -1,0 +1,103 @@
+name: Build & Release
+
+# Builds on every push to master and on manual runs.
+# Pushing a tag like v1.0.0 also creates a GitHub Release with the
+# packaged binary attached.
+#
+# Runs the full test suite first — a failing test stops the build before
+# anything is published or released.
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write      # required to create a GitHub Release on tag pushes
+  id-token: write      # required to mint the OIDC token for Sigstore signing
+  attestations: write  # required to persist the build-provenance attestation
+
+env:
+  DOTNET_VERSION: '10.0.x'                 # .NET 10 SDK: builds the net10.0 target AND parses .slnx (needs 9.0.200+)
+  SOLUTION_PATH: 'Crawler.slnx'            # solution (built + tested)
+  PROJECT_PATH: 'Crawler/Crawler.csproj'   # the app project (published)
+  APP_NAME: 'Crawler'                      # artifact / zip name
+  CONFIGURATION: 'Release'
+  RUNTIME: 'win-x64'
+
+jobs:
+  build:
+    # Windows runner is REQUIRED: PublishReadyToRun cross-gen for win-x64
+    # must run on Windows.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # Restores, builds, and runs the whole suite. If any test fails the
+      # job stops here — no publish, no release.
+      - name: Test
+        run: dotnet test "${{ env.SOLUTION_PATH }}" -c ${{ env.CONFIGURATION }}
+
+      # Self-contained single-file publish, ReadyToRun, untrimmed — mirrors
+      # the VS FolderProfile so the CI binary matches the one published locally.
+      # (Settings are passed explicitly because a command-line publish does not
+      # read the .pubxml profile. PublishDir from the profile is intentionally
+      # NOT used; CI publishes to ./publish instead.)
+      # Trimming stays OFF: the reflection-based JSON config breaks under trim.
+      - name: Publish
+        run: >
+          dotnet publish "${{ env.PROJECT_PATH }}"
+          -c ${{ env.CONFIGURATION }}
+          -r ${{ env.RUNTIME }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:PublishReadyToRun=true
+          -p:PublishTrimmed=false
+          -o publish
+
+      # Drops debug symbols, folds in the licence/notice files so they are
+      # visible in the download (the app also self-heals them at runtime, but
+      # a downloader should see them without running anything), then zips.
+      # The licence copies are best-effort: adjust the paths if yours differ;
+      # missing files are skipped rather than failing the build.
+      - name: Package (zip)
+        shell: pwsh
+        run: |
+          Get-ChildItem publish -Recurse -Filter *.pdb | Remove-Item -Force
+          if (Test-Path 'LICENSE.txt') { Copy-Item 'LICENSE.txt' publish/ }
+          if (Test-Path 'Crawler/licenses') { Copy-Item 'Crawler/licenses' publish/ -Recurse }
+          Compress-Archive -Path publish/* -DestinationPath "${{ env.APP_NAME }}-${{ env.RUNTIME }}.zip" -Force
+
+      # Signs a build-provenance attestation binding the zip's SHA-256 to this
+      # workflow run, repo, and commit. Public repo -> written to the public
+      # Sigstore transparency log; verify a downloaded zip with:
+      #   gh attestation verify <zip> --repo sascha-codeforfun/Crawler
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.APP_NAME }}-${{ env.RUNTIME }}.zip
+
+      # Always uploads a downloadable artifact to the workflow run.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.RUNTIME }}
+          path: ${{ env.APP_NAME }}-${{ env.RUNTIME }}.zip
+          retention-days: 30
+
+      # Only runs for tag pushes (e.g. v1.2.3): creates a GitHub Release.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: >
+          gh release create "${{ github.ref_name }}" "${{ env.APP_NAME }}-${{ env.RUNTIME }}.zip" --generate-notes
+          || gh release upload "${{ github.ref_name }}" "${{ env.APP_NAME }}-${{ env.RUNTIME }}.zip" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
